@@ -78,7 +78,18 @@ export interface CaseRecord {
   facts: string[];
   parties: { name: string; role: string; details: string }[];
   timeline: { id: string; date: string; event: string; importance?: string }[];
-  evidence: { id: string; name: string; type: 'document' | 'digital' | 'financial' | 'witness'; description: string; date?: string; importance?: 'Crucial' | 'Supporting' | 'Secondary' }[];
+  evidence: {
+    id: string;
+    name: string;
+    type: 'document' | 'digital' | 'financial' | 'witness';
+    description: string;
+    date?: string;
+    importance?: 'Crucial' | 'Supporting' | 'Secondary';
+    fileName?: string;
+    fileSize?: string;
+    mimeType?: string;
+    fileData?: string;
+  }[];
   report?: CasePreparationReport;
   createdAt: string;
   updatedAt: string;

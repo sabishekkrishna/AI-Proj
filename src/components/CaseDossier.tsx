@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { FolderKanban, Plus, Calendar, FileText, CheckCircle2, AlertCircle, Trash2, Edit3, ArrowRight, ShieldCheck, Sparkles, BarChart2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { FolderKanban, Plus, Calendar, FileText, CheckCircle2, AlertCircle, Trash2, Edit3, ArrowRight, ShieldCheck, Sparkles, BarChart2, Upload, FileDown, Eye, X, Image as ImageIcon } from 'lucide-react';
 import { CaseRecord, CasePreparationReport } from '../types';
 import { fetchCasesApi, updateCaseApi, deleteCaseApi, generateCaseReportApi } from '../services/apiService';
 
@@ -24,6 +24,12 @@ export default function CaseDossier({ onViewReport, onStartNewCase, onOpenChatWi
   const [newEvidenceType, setNewEvidenceType] = useState<'document' | 'digital' | 'financial' | 'witness'>('document');
   const [newEvidenceDesc, setNewEvidenceDesc] = useState('');
   const [newEvidenceImportance, setNewEvidenceImportance] = useState<'Crucial' | 'Supporting' | 'Secondary'>('Crucial');
+
+  // File Upload & Drag & Drop State
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [previewItem, setPreviewItem] = useState<any | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadCases();
@@ -56,8 +62,9 @@ export default function CaseDossier({ onViewReport, onStartNewCase, onOpenChatWi
     if (c.timeline && c.timeline.length > 0) score += 15;
     if (c.timeline && c.timeline.length >= 3) score += 5;
     if (c.evidence && c.evidence.length > 0) score += 15;
+    if (c.evidence && c.evidence.some(e => e.fileData)) score += 5; // Extra points for real uploaded document!
     if (c.evidence && c.evidence.length >= 3) score += 5;
-    if (c.state && c.district) score += 10;
+    if (c.state && c.district) score += 5;
     return Math.min(score, 100);
   };
 
@@ -88,6 +95,62 @@ export default function CaseDossier({ onViewReport, onStartNewCase, onOpenChatWi
       setCases(prev => prev.map(c => (c.id === updated.id ? updated : c)));
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  // Process Document Uploads
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !selectedCase) return;
+    setUploadingFiles(true);
+
+    const newItems: any[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const base64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      // Auto detect type
+      const lowerName = file.name.toLowerCase();
+      let detectedType: 'document' | 'digital' | 'financial' | 'witness' = 'document';
+      if (lowerName.includes('chat') || lowerName.includes('whatsapp') || lowerName.includes('screenshot') || file.type.startsWith('image/')) {
+        detectedType = 'digital';
+      } else if (lowerName.includes('bank') || lowerName.includes('upi') || lowerName.includes('receipt') || lowerName.includes('bill') || lowerName.includes('invoice') || lowerName.includes('statement')) {
+        detectedType = 'financial';
+      }
+
+      const formattedSize = file.size > 1024 * 1024
+        ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+        : `${Math.round(file.size / 1024)} KB`;
+
+      newItems.push({
+        id: `ev-file-${Date.now()}-${i}`,
+        name: file.name.replace(/\.[^/.]+$/, ''),
+        type: detectedType,
+        description: `Preserved evidence document (${file.name}, ${formattedSize})`,
+        importance: 'Crucial' as const,
+        date: new Date().toISOString().split('T')[0],
+        fileName: file.name,
+        fileSize: formattedSize,
+        mimeType: file.type,
+        fileData: base64
+      });
+    }
+
+    try {
+      const updatedEvidence = [...selectedCase.evidence, ...newItems];
+      const updated = await updateCaseApi(selectedCase.id, { evidence: updatedEvidence });
+      setCases(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+    } catch (err) {
+      console.error(err);
+      alert('Failed to save uploaded evidence.');
+    } finally {
+      setUploadingFiles(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -123,6 +186,16 @@ export default function CaseDossier({ onViewReport, onStartNewCase, onOpenChatWi
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleDownloadFile = (ev: any) => {
+    if (!ev.fileData) return;
+    const link = document.createElement('a');
+    link.href = ev.fileData;
+    link.download = ev.fileName || `${ev.name}.dat`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   };
 
   const handleGenerateReport = async () => {
@@ -409,73 +482,179 @@ export default function CaseDossier({ onViewReport, onStartNewCase, onOpenChatWi
               </div>
             </div>
 
-            {/* Evidence Organizer */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+            {/* Evidence & Document Organizer */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-5 h-5 text-amber-600" />
-                  <h3 className="font-bold text-slate-900 text-sm">Evidence & Document Organizer</h3>
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-sm">Evidence & Document Organizer</h3>
+                    <p className="text-[11px] text-slate-500">Upload or catalog physical documents, WhatsApp screenshots, UPI proofs, and witnesses.</p>
+                  </div>
                 </div>
-                <span className="text-xs text-slate-500">
-                  {selectedCase.evidence.length} Items Preserved
+                <span className="text-xs text-slate-500 font-semibold bg-slate-100 px-2.5 py-1 rounded-full">
+                  {selectedCase.evidence.length} Preserved
                 </span>
               </div>
 
-              {/* Evidence Items List */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {selectedCase.evidence.map((ev, idx) => (
-                  <div
-                    key={ev.id || idx}
-                    className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1.5 relative group"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-900 text-xs truncate max-w-[200px]">
-                        {ev.name}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <span
-                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                            ev.importance === 'Crucial'
-                              ? 'bg-red-100 text-red-800'
-                              : ev.importance === 'Supporting'
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-slate-200 text-slate-700'
-                          }`}
-                        >
-                          {ev.importance || 'Crucial'}
-                        </span>
-                        <button
-                          onClick={() => handleDeleteEvidenceItem(ev.id)}
-                          className="text-slate-400 hover:text-red-600 p-0.5 transition-colors"
-                          title="Remove item"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="text-[11px] text-slate-500 uppercase tracking-wide">
-                      Type: {ev.type}
-                    </div>
-                    <p className="text-slate-600 text-[11px] leading-relaxed">{ev.description}</p>
+              {/* Document Upload Dropzone */}
+              <div
+                onDragOver={e => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={e => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  handleFileUpload(e.dataTransfer.files);
+                }}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer ${
+                  isDragging
+                    ? 'border-amber-500 bg-amber-50/80 scale-[1.01]'
+                    : 'border-slate-300 hover:border-amber-400 bg-slate-50/50 hover:bg-slate-50'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.txt"
+                  onChange={e => handleFileUpload(e.target.files)}
+                  className="hidden"
+                />
+
+                <div className="flex flex-col items-center justify-center space-y-2">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-100/80 text-amber-800 flex items-center justify-center shadow-inner">
+                    <Upload className="w-6 h-6 text-amber-700" />
                   </div>
-                ))}
+                  <div className="space-y-0.5">
+                    <div className="text-xs sm:text-sm font-bold text-slate-800">
+                      {uploadingFiles ? 'Saving and encrypting documents...' : 'Click to Upload or Drag & Drop Evidence Files'}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Upload rent agreements, bank account statements, police complaints, FIR copies, or WhatsApp screenshots (PDF, JPG, PNG, DOC)
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-100/70 px-2.5 py-0.5 rounded-full mt-1">
+                    Direct File Preservation Active
+                  </span>
+                </div>
               </div>
 
-              {selectedCase.evidence.length === 0 && (
-                <p className="text-xs text-slate-500 text-center py-4 italic">
-                  No evidence cataloged yet. Add documents, receipts, or chat logs below.
-                </p>
-              )}
+              {/* Evidence Items List */}
+              <div className="space-y-2">
+                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Preserved Evidence Items ({selectedCase.evidence.length})
+                </div>
 
-              {/* Add New Evidence Form */}
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
-                <div className="text-xs font-bold text-slate-800">Add Evidence Item</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {selectedCase.evidence.map((ev, idx) => (
+                    <div
+                      key={ev.id || idx}
+                      className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2 relative group hover:border-slate-300 transition-all"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          {ev.fileData && ev.mimeType?.startsWith('image/') ? (
+                            <img
+                              src={ev.fileData}
+                              alt={ev.name}
+                              className="w-8 h-8 rounded object-cover border border-slate-200 cursor-pointer"
+                              onClick={() => setPreviewItem(ev)}
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-[10px]">
+                              {ev.type === 'document' ? 'DOC' : ev.type === 'financial' ? 'BANK' : ev.type === 'digital' ? 'CHAT' : 'WIT'}
+                            </div>
+                          )}
+                          <div className="truncate">
+                            <span className="font-bold text-slate-900 text-xs block truncate max-w-[170px]" title={ev.name}>
+                              {ev.name}
+                            </span>
+                            {ev.fileName && (
+                              <span className="text-[10px] text-slate-400 block truncate max-w-[170px]">
+                                {ev.fileName} {ev.fileSize ? `(${ev.fileSize})` : ''}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                              ev.importance === 'Crucial'
+                                ? 'bg-red-100 text-red-800'
+                                : ev.importance === 'Supporting'
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {ev.importance || 'Crucial'}
+                          </span>
+                          <button
+                            onClick={() => handleDeleteEvidenceItem(ev.id)}
+                            className="text-slate-400 hover:text-red-600 p-1 transition-colors"
+                            title="Remove item"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="text-slate-600 text-[11px] leading-relaxed line-clamp-2">{ev.description}</p>
+
+                      {/* File Actions */}
+                      <div className="pt-1 border-t border-slate-200/70 flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 uppercase tracking-wide text-[10px]">
+                          {ev.type}
+                        </span>
+
+                        <div className="flex items-center gap-2">
+                          {ev.fileData && (
+                            <>
+                              <button
+                                onClick={() => setPreviewItem(ev)}
+                                className="text-amber-700 hover:text-amber-900 font-medium flex items-center gap-0.5 cursor-pointer"
+                              >
+                                <Eye className="w-3 h-3" />
+                                <span>Preview</span>
+                              </button>
+                              <button
+                                onClick={() => handleDownloadFile(ev)}
+                                className="text-slate-600 hover:text-slate-900 font-medium flex items-center gap-0.5 cursor-pointer"
+                              >
+                                <FileDown className="w-3 h-3" />
+                                <span>Download</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {selectedCase.evidence.length === 0 && (
+                  <p className="text-xs text-slate-500 text-center py-4 italic">
+                    No evidence cataloged or uploaded yet. Use the upload area above or add manual notes below.
+                  </p>
+                )}
+              </div>
+
+              {/* Add New Evidence Manually (for witnesses or pending papers) */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
+                <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                  <span>Manual Evidence Entry (Witnesses / Physical Records)</span>
+                  <span className="text-[10px] text-slate-400 font-normal">Optional</span>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <input
                     type="text"
                     value={newEvidenceName}
                     onChange={e => setNewEvidenceName(e.target.value)}
-                    placeholder="Evidence name (e.g. Registered Rent Agreement)"
+                    placeholder="Evidence name (e.g. Eyewitness Statement or Rent Ledger)"
                     className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-900"
                   />
                   <select
@@ -503,7 +682,7 @@ export default function CaseDossier({ onViewReport, onStartNewCase, onOpenChatWi
                     type="text"
                     value={newEvidenceDesc}
                     onChange={e => setNewEvidenceDesc(e.target.value)}
-                    placeholder="Brief description or relevance of this evidence"
+                    placeholder="Brief description or relevance of this item"
                     className="flex-1 bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-900"
                   />
                   <button
@@ -511,11 +690,63 @@ export default function CaseDossier({ onViewReport, onStartNewCase, onOpenChatWi
                     disabled={!newEvidenceName}
                     className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white font-medium rounded-lg text-xs cursor-pointer"
                   >
-                    Add Evidence
+                    Add Entry
                   </button>
                 </div>
               </div>
             </div>
+
+            {/* Document Preview Modal */}
+            {previewItem && (
+              <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900">{previewItem.name}</h4>
+                      <p className="text-[11px] text-slate-500">{previewItem.fileName || previewItem.description}</p>
+                    </div>
+                    <button
+                      onClick={() => setPreviewItem(null)}
+                      className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-auto flex items-center justify-center bg-slate-100 rounded-xl p-4 min-h-[250px]">
+                    {previewItem.fileData && previewItem.mimeType?.startsWith('image/') ? (
+                      <img
+                        src={previewItem.fileData}
+                        alt={previewItem.name}
+                        className="max-h-[500px] w-auto rounded object-contain shadow"
+                      />
+                    ) : (
+                      <div className="text-center space-y-2 p-6">
+                        <FileText className="w-16 h-16 text-slate-400 mx-auto" />
+                        <div className="text-xs font-semibold text-slate-700">{previewItem.fileName || 'Preserved Document'}</div>
+                        <p className="text-[11px] text-slate-500">{previewItem.fileSize || 'Attached File'}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <button
+                      onClick={() => handleDownloadFile(previewItem)}
+                      className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <FileDown className="w-4 h-4 text-amber-400" />
+                      <span>Download File</span>
+                    </button>
+                    <button
+                      onClick={() => setPreviewItem(null)}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Generated Report Shortcut (if available) */}
             {selectedCase.report && (

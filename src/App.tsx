@@ -47,7 +47,7 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-100 font-sans text-slate-900 selection:bg-amber-200 selection:text-slate-900">
       {/* Legal Awareness & Emergency Banner */}
-      <DisclaimerBanner />
+      <DisclaimerBanner preferredLanguage={preferredLanguage} />
 
       {/* Navigation Header */}
       <Header

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Scale, MessageSquare, PlusCircle, FolderKanban, Search, FileText, MapPin, HeartHandshake, BookOpen, ShieldCheck, Sparkles, Languages, Check, HelpCircle, Menu, X } from 'lucide-react';
+import { getTranslation } from '../data/translations';
 
 interface HeaderProps {
   activeTab: string;
@@ -33,17 +34,18 @@ export default function Header({
 }: HeaderProps) {
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const t = getTranslation(preferredLanguage);
 
   const navItems = [
-    { id: 'chat', label: 'AI Assistant', icon: MessageSquare },
-    { id: 'wizard', label: 'Start New Case', icon: PlusCircle },
-    { id: 'dossier', label: 'My Cases & Dossier', icon: FolderKanban },
-    { id: 'analyzer', label: 'Analyze Document', icon: FileText },
-    { id: 'search', label: 'Search Law', icon: Search },
-    { id: 'forums', label: 'Where Should I Go?', icon: MapPin },
-    { id: 'legalaid', label: 'Free Legal Aid', icon: HeartHandshake },
-    { id: 'dictionary', label: 'Dictionary', icon: BookOpen },
-    { id: 'admin', label: 'Admin & System', icon: ShieldCheck }
+    { id: 'chat', label: t.navAssistant, icon: MessageSquare },
+    { id: 'wizard', label: t.navNewCase, icon: PlusCircle },
+    { id: 'dossier', label: t.navDossier, icon: FolderKanban },
+    { id: 'analyzer', label: t.navAnalyze, icon: FileText },
+    { id: 'search', label: t.navSearch, icon: Search },
+    { id: 'forums', label: t.navForums, icon: MapPin },
+    { id: 'legalaid', label: t.navLegalAid, icon: HeartHandshake },
+    { id: 'dictionary', label: t.navDictionary, icon: BookOpen },
+    { id: 'admin', label: t.navAdmin, icon: ShieldCheck }
   ];
 
   return (
@@ -64,11 +66,11 @@ export default function Header({
                 Nyaya<span className="text-amber-400">Sahayak</span>
               </span>
               <span className="text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-300">
-                Indian Law AI
+                {preferredLanguage !== 'English' ? LANGUAGES.find(l => l.code === preferredLanguage)?.native : 'Indian Law AI'}
               </span>
             </div>
             <p className="text-xs text-slate-400 font-sans hidden sm:block">
-              Understand Your Rights. Prepare Your Case. Know Your Next Step.
+              {t.tagline}
             </p>
           </div>
         </div>
@@ -86,7 +88,7 @@ export default function Header({
             title="Convert legal terminology into simple everyday language"
           >
             <HelpCircle className="w-3.5 h-3.5" />
-            <span>Explain Like I'm New to Law</span>
+            <span>{t.explainLikeNew}</span>
             <span
               className={`w-2 h-2 rounded-full ${
                 explainLikeNew ? 'bg-amber-400 ring-2 ring-amber-400/30' : 'bg-slate-500'
@@ -101,7 +103,7 @@ export default function Header({
             title="Test 10 pre-loaded demonstration scenarios for the college project"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>10 Demo Scenarios</span>
+            <span>{t.demoScenarios}</span>
           </button>
 
           {/* Language Selector Dropdown */}
@@ -111,7 +113,7 @@ export default function Header({
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 border border-slate-700 text-slate-200 hover:text-white hover:bg-slate-700 transition-colors"
             >
               <Languages className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden sm:inline">
+              <span className="font-semibold text-amber-300">
                 {LANGUAGES.find(l => l.code === preferredLanguage)?.native || preferredLanguage}
               </span>
             </button>
@@ -122,7 +124,7 @@ export default function Header({
                 onClick={() => setLangMenuOpen(false)}
               >
                 <div className="px-3 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-700/60 mb-1">
-                  Select Language
+                  Select Language / भाषा चुनें
                 </div>
                 {LANGUAGES.map(lang => (
                   <button

@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { AlertTriangle, ShieldAlert, PhoneCall, X } from 'lucide-react';
+import { getTranslation } from '../data/translations';
 
-export default function DisclaimerBanner() {
+export default function DisclaimerBanner({ preferredLanguage = 'English' }: { preferredLanguage?: string }) {
   const [dismissed, setDismissed] = useState(false);
+  const t = getTranslation(preferredLanguage);
 
   if (dismissed) return null;
 
@@ -14,12 +16,8 @@ export default function DisclaimerBanner() {
             <AlertTriangle className="w-4 h-4" />
           </div>
           <div>
-            <span className="font-semibold text-amber-900">Legal Information Disclaimer:</span>{' '}
-            <span>
-              This application provides general legal awareness and case-preparation assistance. It is{' '}
-              <strong className="font-medium underline decoration-amber-400">not a substitute for a qualified advocate</strong>.
-              Laws and judicial procedures in India can vary; verify critical decisions with a licensed legal practitioner or official government gazette.
-            </span>
+            <span className="font-semibold text-amber-900">{t.disclaimerTitle}</span>{' '}
+            <span>{t.disclaimerText}</span>
           </div>
         </div>
 

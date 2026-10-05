@@ -128,7 +128,8 @@ CRITICAL RULES:
 4. Do NOT invent limitation periods. If unsure, state that limitation periods apply and must be verified.
 5. If user is in an emergency, prioritize safety and official helplines (112, 1930, 181, 15100).
 6. Response must be returned strictly formatted as valid JSON adhering to the target schema.
-7. Language setting: Respond in ${preferredLanguage}. ${explainLikeNew ? 'Use ultra-simple, everyday conversational language, explaining any legal term in simple analogies.' : 'Use clear, accessible language.'}
+7. CRITICAL LANGUAGE REQUIREMENT: The user has selected the language: "${preferredLanguage}". YOU MUST WRITE YOUR ENTIRE RESPONSE AND ALL TEXT FIELDS (understanding, lawExplanation, followUpQuestions, possibleNextSteps, possibleForum, urgencyAndTimeLimits, importantWarning, casePreparationOffer, simpleLanguageSummary) IN ${preferredLanguage}. Do NOT write in English unless preferredLanguage is English.
+8. ${explainLikeNew ? 'Use ultra-simple, everyday conversational language, explaining any legal term in simple analogies.' : 'Use clear, accessible language.'}
 `;
 
       const prompt = `
@@ -256,15 +257,90 @@ Format your output as a single valid JSON object with the following fields:
   const categorySources = INDIAN_LEGAL_DATABASE.filter(s => s.category === determinedCategory);
   const primaryLaw = categorySources[0] || topSource;
 
+  const isHindi = preferredLanguage === 'Hindi';
+  const isTamil = preferredLanguage === 'Tamil';
+  const isTelugu = preferredLanguage === 'Telugu';
+
+  let understanding = `From what you have described, your issue appears to involve ${determinedCategory.toLowerCase()} regarding "${userQuery.slice(0, 90)}...".`;
+  let lawExplanation = primaryLaw.simpleExplanation + ' ' + primaryLaw.fullProvisionsSummary;
+  let followUpQuestions = [
+    'What is the exact date or time frame when this occurred?',
+    'Which Indian State and District did this event take place in?',
+    'Do you have any written agreements, invoices, receipts, or chat logs?',
+    'Have you already issued a written notice, letter, or registered complaint?'
+  ];
+  let possibleNextSteps = [
+    'Preserve and organize all relevant documents and electronic evidence.',
+    'Prepare a clear chronological timeline of events.',
+    'Send a formal written demand or legal notice via registered post / speed post.',
+    `Approach the appropriate forum (${primaryLaw.relevantForums[0] || 'Jurisdictional Court'}).`,
+    'Consult a licensed advocate to formalize your legal petition.'
+  ];
+  let urgencyAndTimeLimits = primaryLaw.limitationPeriod || 'Statutory limitation period applies. Verify the current limitation window under the Limitation Act, 1963 with an advocate.';
+  let importantWarning = 'Important: This is general educational legal guidance. Procedures and state-specific amendments vary. Do not rely solely on automated summaries for court proceedings.';
+  let casePreparationOffer = 'Would you like me to prepare a Case Preparation Report from the details you provided?';
+  let simpleLanguageSummary = explainLikeNew
+    ? `In plain words: You may have a legitimate legal right to seek a remedy under ${primaryLaw.act}. Make sure you keep your documents safe and don't delay reaching out to the right authority.`
+    : undefined;
+
+  if (isHindi) {
+    understanding = `आपके विवरण के अनुसार, आपका मामला "${userQuery.slice(0, 70)}..." से संबंधित ${determinedCategory} (भारतीय कानून) के अंतर्गत आता है।`;
+    lawExplanation = `${primaryLaw.simpleExplanation}। कानून के अनुसार पीड़ित पक्ष को सक्षम न्यायालय अथवा प्राधिकारी के समक्ष विधिक उपचार मांगने का अधिकार है।`;
+    followUpQuestions = [
+      'यह घटना अथवा विवाद किस निश्चित तिथि को प्रारंभ हुआ?',
+      'यह मामला किस राज्य और जिले का है?',
+      'क्या आपके पास लिखित अनुबंध, बैंक रसीद, व्हाट्सएप चैट अथवा ईमेल उपलब्ध हैं?',
+      'क्या आपने दूसरी पार्टी को पहले कोई लिखित शिकायत अथवा कानूनी नोटिस भेजा है?'
+    ];
+    possibleNextSteps = [
+      'सभी दस्तावेजी व डिजिटल साक्ष्य (व्हाट्सएप चैट, बैंक स्टेटमेंट) सुरक्षित करें।',
+      'घटनाक्रम की एक स्पष्ट समय-सारिणी (Timeline) तैयार करें।',
+      'वकील के माध्यम से एक औपचारिक कानूनी नोटिस (Legal Notice) भेजें।',
+      `उचित कानूनी मंच (${primaryLaw.relevantForums[0] || 'संबंधित न्यायालय'}) में संपर्क करें।`,
+      'योग्य अधिवक्ता से परामर्श लेकर औपचारिक याचिका प्रस्तुत करें।'
+    ];
+    urgencyAndTimeLimits = primaryLaw.limitationPeriod ? `समय सीमा (Limitation): ${primaryLaw.limitationPeriod}` : 'कानूनी मामलों में निश्चित समय-सीमा (Limitation Period) लागू होती है। समय बीतने से पूर्व वकील से परामर्श लें।';
+    importantWarning = 'महत्वपूर्ण चेतावनी: यह केवल सामान्य कानूनी जागरूकता है। विभिन्न राज्यों में प्रक्रियाएं भिन्न हो सकती हैं। न्यायालय में जाने से पूर्व किसी योग्य अधिवक्ता से परामर्श अवश्य लें।';
+    casePreparationOffer = 'क्या आप चाहेंगे कि मैं आपके द्वारा दी गई जानकारी से एक औपचारिक केस तैयारी रिपोर्ट (Case Preparation Report) तैयार करूँ?';
+    simpleLanguageSummary = explainLikeNew
+      ? `सरल शब्दों में: ${primaryLaw.act} के तहत आपको कानूनी अधिकार प्राप्त हो सकता है। अपने सभी सबूतों को संभाल कर रखें और देरी न करें।`
+      : undefined;
+  } else if (isTamil) {
+    understanding = `நீங்கள் விவரித்த தகவலின்படி, உங்கள் பிரச்சனை "${userQuery.slice(0, 70)}..." தொடர்பான ${determinedCategory} சட்டப் பிரிவின் கீழ் வருகிறது.`;
+    followUpQuestions = [
+      'இந்த பிரச்சனை எந்த தேதியில் தொடங்கியது?',
+      'எந்த மாநிலம் மற்றும் மாவட்டத்தில் இது நிகழ்ந்தது?',
+      'உங்களிடம் ஒப்பந்தம், வங்கி ரசீது அல்லது வாட்ஸ்அப் உரையாடல் உள்ளதா?',
+      'எதிர் தரப்பினருக்கு ஏற்கனவே எழுத்துப்பூர்வ கடிதம் அல்லது வக்கீல் நோட்டீஸ் அனுப்பியுள்ளீர்களா?'
+    ];
+    possibleNextSteps = [
+      'அனைத்து ஆவணங்களையும் டிஜிட்டல் சான்றுகளையும் பாதுகாக்கவும்.',
+      'சம்பவங்களின் காலவரிசையை (Timeline) தயார் செய்யவும்.',
+      'வழக்கறிஞர் மூலம் அதிகாரப்பூர்வ சட்ட அறிவிப்பை (Legal Notice) அனுப்பவும்.',
+      'தகுந்த நீதிமன்றம் அல்லது அதிகாரியை அணுகவும்.'
+    ];
+    importantWarning = 'முக்கிய எச்சரிக்கை: இது பொதுவான சட்ட வழிகாட்டல் மட்டுமே. நீதிமன்ற நடவடிக்கைகளுக்கு தகுதியான வழக்கறிஞரை அணுகவும்.';
+    casePreparationOffer = 'நீங்கள் வழங்கிய தகவல்களைக் கொண்டு வழக்கு தயாரிப்பு அறிக்கையை உருவாக்க விரும்புகிறீர்களா?';
+  } else if (isTelugu) {
+    understanding = `మీరు వివరించిన వివరాల ప్రకారం, మీ సమస్య ${determinedCategory} పరిధిలోకి వస్తుంది.`;
+    followUpQuestions = [
+      'ఈ సమస్య ఏ తేదీన ప్రారంభమైంది?',
+      'ఏ రాష్ట్రం మరియు జిల్లాలో జరిగింది?',
+      'మీ వద్ద ఒప్పంద పత్రాలు, బ్యాంక్ రశీదులు లేదా చాట్ వివరాలు ఉన్నాయా?',
+      'ఇంతకుముందు లీగల్ నోటీసు పంపించారా?'
+    ];
+    casePreparationOffer = 'మీరు అందించిన సమాచారంతో పూర్తి కేస్ ప్రిపరేషన్ రిపోర్ట్‌ను సిద్ధం చేయమంటారా?';
+  }
+
   return {
-    understanding: `From what you have described, your issue appears to involve ${determinedCategory.toLowerCase()} regarding "${userQuery.slice(0, 90)}...".`,
+    understanding,
     category: determinedCategory,
     relevantLaws: [
       {
         act: primaryLaw.act,
         section: primaryLaw.section,
         status: primaryLaw.currentStatus,
-        explanation: primaryLaw.simpleExplanation,
+        explanation: isHindi ? primaryLaw.simpleExplanation : primaryLaw.simpleExplanation,
         verificationStatus: primaryLaw.confidence
       },
       ...(primaryLaw.oldEquivalent
@@ -273,36 +349,25 @@ Format your output as a single valid JSON object with the following fields:
               act: primaryLaw.oldEquivalent,
               section: undefined,
               status: 'Historical Reference' as const,
-              explanation: 'Former statutory provision applicable before recent reforms.',
+              explanation: isHindi ? 'पूर्ववर्ती कानूनी प्रावधान जो नए कानून से पूर्व लागू था।' : 'Former statutory provision applicable before recent reforms.',
               verificationStatus: 'Verified' as const
             }
           ]
         : [])
     ],
-    lawExplanation: primaryLaw.simpleExplanation + ' ' + primaryLaw.fullProvisionsSummary,
-    followUpQuestions: [
-      'What is the exact date or time frame when this occurred?',
-      'Which Indian State and District did this event take place in?',
-      'Do you have any written agreements, invoices, receipts, or chat logs?',
-      'Have you already issued a written notice, letter, or registered complaint?'
-    ],
+    lawExplanation,
+    followUpQuestions,
     evidenceToPreserve: {
-      documents: ['Formal agreements, contract letters, receipts, or registered notices'],
-      digital: ['WhatsApp / SMS conversations, emails, and screenshots with timestamps'],
-      financial: ['Bank passbook entries, account statements, and UPI/NEFT transaction IDs'],
-      witnesses: ['Any colleagues, family members, or witnesses present at the scene']
+      documents: isHindi ? ['अनुबंध पत्र, रसीदें, बिल, या रजिस्टर्ड नोटिस'] : ['Formal agreements, contract letters, receipts, or registered notices'],
+      digital: isHindi ? ['व्हाट्सएप व एसएमएस संदेश, ईमेल, और स्क्रीनशॉट'] : ['WhatsApp / SMS conversations, emails, and screenshots with timestamps'],
+      financial: isHindi ? ['बैंक पासबुक प्रविष्टियां, खाता विवरण, व यूपीआई यूटीआर संख्याएं'] : ['Bank passbook entries, account statements, and UPI/NEFT transaction IDs'],
+      witnesses: isHindi ? ['घटनास्थल अथवा लेन-देन के समय उपस्थित कोई भी सहकर्मी या गवाह'] : ['Any colleagues, family members, or witnesses present at the scene']
     },
-    possibleNextSteps: [
-      'Preserve and organize all relevant documents and electronic evidence.',
-      'Prepare a clear chronological timeline of events.',
-      'Send a formal written demand or legal notice via registered post / speed post.',
-      `Approach the appropriate forum (${primaryLaw.relevantForums[0] || 'Jurisdictional Court'}).`,
-      'Consult a licensed advocate to formalize your legal petition.'
-    ],
+    possibleNextSteps,
     possibleForum: primaryLaw.relevantForums,
-    urgencyAndTimeLimits: primaryLaw.limitationPeriod || 'Statutory limitation period applies. Verify the current limitation window under the Limitation Act, 1963 with an advocate.',
-    importantWarning: 'Important: This is general educational legal guidance. Procedures and state-specific amendments vary. Do not rely solely on automated summaries for court proceedings.',
-    casePreparationOffer: 'Would you like me to prepare a Case Preparation Report from the details you provided?',
+    urgencyAndTimeLimits,
+    importantWarning,
+    casePreparationOffer,
     sources: [
       {
         title: primaryLaw.title,
@@ -313,9 +378,7 @@ Format your output as a single valid JSON object with the following fields:
       }
     ],
     emergency,
-    simpleLanguageSummary: explainLikeNew
-      ? `In plain words: You may have a legitimate legal right to seek a remedy under ${primaryLaw.act}. Make sure you keep your documents safe and don't delay reaching out to the right authority.`
-      : undefined
+    simpleLanguageSummary
   };
 }
 

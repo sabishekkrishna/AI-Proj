@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Mic, MicOff, AlertCircle, FileCheck, ArrowRight, ShieldCheck, Scale, CheckCircle2, HelpCircle, ExternalLink, Sparkles, RefreshCw, BookmarkPlus, Copy, Check } from 'lucide-react';
 import { StructuredChatResponse, ChatMessageItem, CaseRecord } from '../types';
 import { sendChatMessage } from '../services/apiService';
+import { getTranslation } from '../data/translations';
 
 interface ChatInterfaceProps {
   preferredLanguage: string;
@@ -10,27 +11,20 @@ interface ChatInterfaceProps {
   onNavigateToTab: (tab: string) => void;
 }
 
-const QUICK_PROMPTS = [
-  'My employer has not paid my salary for 2 months.',
-  'My landlord is refusing to return my security deposit.',
-  'I was cheated in an online UPI transfer fraud.',
-  'Local police station is refusing to register an FIR.',
-  'I received a registered legal notice for breach of agreement.',
-  'I bought a defective laptop and the brand denies warranty.'
-];
-
 export default function ChatInterface({
   preferredLanguage,
   explainLikeNew,
   onPrepareReportFromChat,
   onNavigateToTab
 }: ChatInterfaceProps) {
+  const t = getTranslation(preferredLanguage);
+
   const [messages, setMessages] = useState<ChatMessageItem[]>([
     {
       id: 'welcome-msg',
       sender: 'assistant',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      text: `Namaste! I am NyayaSahayak, your Indian legal awareness and case-preparation assistant.\n\nDescribe your legal situation or problem in your own words (in English, Hindi, or your preferred language). I will help you understand relevant Indian laws, identify essential evidence, and guide you on what to ask a qualified advocate.`
+      text: t.chatWelcome
     }
   ]);
   const [input, setInput] = useState('');
@@ -40,6 +34,23 @@ export default function ChatInterface({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const speechRecognitionRef = useRef<any>(null);
+
+  // Update initial welcome message if user changes language before sending messages
+  useEffect(() => {
+    setMessages(prev => {
+      if (prev.length === 1 && prev[0].id === 'welcome-msg') {
+        return [
+          {
+            id: 'welcome-msg',
+            sender: 'assistant',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: t.chatWelcome
+          }
+        ];
+      }
+      return prev;
+    });
+  }, [preferredLanguage, t.chatWelcome]);
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -53,7 +64,18 @@ export default function ChatInterface({
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = false;
-      recognition.lang = preferredLanguage === 'Hindi' ? 'hi-IN' : preferredLanguage === 'Tamil' ? 'ta-IN' : 'en-IN';
+
+      const langMap: Record<string, string> = {
+        Hindi: 'hi-IN',
+        Tamil: 'ta-IN',
+        Telugu: 'te-IN',
+        Kannada: 'kn-IN',
+        Malayalam: 'ml-IN',
+        Bengali: 'bn-IN',
+        Marathi: 'mr-IN',
+        English: 'en-IN'
+      };
+      recognition.lang = langMap[preferredLanguage] || 'en-IN';
 
       recognition.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
@@ -510,9 +532,9 @@ export default function ChatInterface({
       <div className="bg-white px-4 py-2 border-t border-slate-200 overflow-x-auto scrollbar-none">
         <div className="flex items-center gap-2 text-xs">
           <span className="font-semibold text-slate-500 whitespace-nowrap text-[11px] uppercase tracking-wide">
-            Common Inquiries:
+            {t.commonInquiries}
           </span>
-          {QUICK_PROMPTS.map((p, idx) => (
+          {t.quickPrompts.map((p, idx) => (
             <button
               key={idx}
               onClick={() => handleSend(p)}
@@ -555,8 +577,8 @@ export default function ChatInterface({
             onChange={e => setInput(e.target.value)}
             placeholder={
               isListening
-                ? 'Listening... please describe your situation...'
-                : 'Describe your legal problem in plain language (e.g., "My employer has not paid my salary")...'
+                ? t.listening
+                : t.inputPlaceholder
             }
             disabled={isLoading}
             className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
@@ -568,7 +590,7 @@ export default function ChatInterface({
             disabled={!input.trim() || isLoading}
             className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white font-medium rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            <span>Ask</span>
+            <span>{t.sendBtn}</span>
             <Send className="w-3.5 h-3.5" />
           </button>
         </form>

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Printer, Download, Copy, Check, ArrowLeft, Scale, ShieldAlert, CheckCircle2, AlertTriangle, FileSpreadsheet } from 'lucide-react';
+import { Printer, Download, Copy, Check, ArrowLeft, Scale, ShieldAlert, CheckCircle2, AlertTriangle, FileSpreadsheet, FileDown } from 'lucide-react';
 import { CasePreparationReport } from '../types';
+import jsPDF from 'jspdf';
 
 interface CaseReportViewProps {
   report: CasePreparationReport;
@@ -9,13 +10,197 @@ interface CaseReportViewProps {
 
 export default function CaseReportView({ report, onBack }: CaseReportViewProps) {
   const [copied, setCopied] = useState(false);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
 
-  const handlePrint = () => {
-    window.print();
+  const handleDownloadPdf = () => {
+    try {
+      setGeneratingPdf(true);
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'pt',
+        format: 'a4'
+      });
+
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 40;
+      const contentWidth = pageWidth - margin * 2;
+      let y = margin;
+
+      const checkPageBreak = (neededHeight: number) => {
+        if (y + neededHeight > pageHeight - margin) {
+          doc.addPage();
+          y = margin;
+          return true;
+        }
+        return false;
+      };
+
+      // Header Banner
+      doc.setFillColor(15, 23, 42); // slate-900
+      doc.rect(0, 0, pageWidth, 55, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(15);
+      doc.text('NyayaSahayak - Case Preparation Report', margin, 32);
+      doc.setFontSize(8.5);
+      doc.setTextColor(245, 158, 11); // amber-400
+      doc.text('OFFICIAL PRE-LITIGATION CLIENT DOSSIER & FACT SHEET', margin, 46);
+
+      y = 75;
+
+      // Title & Metadata
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      const titleLines = doc.splitTextToSize(report.caseSummary.title, contentWidth);
+      doc.text(titleLines, margin, y);
+      y += titleLines.length * 15 + 4;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Category: ${report.caseSummary.category}  |  Jurisdiction: ${report.caseSummary.location}  |  Date: ${report.caseSummary.incidentDate}`, margin, y);
+      y += 18;
+
+      // Helper to print section titles
+      const printSectionHeader = (title: string) => {
+        checkPageBreak(30);
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(margin, y, contentWidth, 18, 3, 3, 'F');
+        doc.setTextColor(180, 83, 9); // amber-700
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
+        doc.text(title, margin + 8, y + 12);
+        y += 24;
+      };
+
+      // Helper to print paragraphs
+      const printParagraph = (text: string, bold: boolean = false, indent: number = 0) => {
+        doc.setFont('helvetica', bold ? 'bold' : 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(30, 41, 59);
+        const lines = doc.splitTextToSize(text, contentWidth - indent);
+        checkPageBreak(lines.length * 12 + 4);
+        doc.text(lines, margin + indent, y);
+        y += lines.length * 12 + 4;
+      };
+
+      // 1. Facts
+      printSectionHeader('1. FACTS OF THE CASE (CHRONOLOGICAL)');
+      report.factsOfTheCase.forEach((f, i) => {
+        printParagraph(`${i + 1}. ${f}`, false, 8);
+      });
+      y += 5;
+
+      // 2. Parties
+      printSectionHeader('2. PARTIES INVOLVED');
+      report.partiesInvolved.forEach(p => {
+        printParagraph(`• ${p.name} (${p.role}): ${p.details}`, false, 8);
+      });
+      y += 5;
+
+      // 3. Timeline
+      printSectionHeader('3. IMPORTANT DATES TIMELINE');
+      report.importantDates.forEach(d => {
+        printParagraph(`[${d.date}]  ${d.event}`, false, 8);
+      });
+      y += 5;
+
+      // 4. Legal Issues
+      printSectionHeader('4. LEGAL ISSUES IDENTIFIED');
+      report.legalIssues.forEach((issue, i) => {
+        printParagraph(`${i + 1}. ${issue}`, false, 8);
+      });
+      y += 5;
+
+      // 5. Relevant Laws
+      printSectionHeader('5. POSSIBLY RELEVANT LAWS & PROVISIONS');
+      report.possiblyRelevantLaws.forEach(law => {
+        printParagraph(`${law.name} ${law.provision ? `(${law.provision})` : ''} - [${law.verificationStatus}]`, true, 8);
+        printParagraph(`Meaning: ${law.simpleExplanation}`, false, 16);
+        printParagraph(`Relevance: ${law.whyRelevant}`, false, 16);
+        y += 3;
+      });
+      y += 5;
+
+      // 6. Evidence Checklist
+      printSectionHeader('6. EVIDENCE CHECKLIST');
+      printParagraph('Physical Documents:', true, 8);
+      report.evidenceChecklist.documents.forEach(d => printParagraph(`[ ] ${d}`, false, 16));
+      printParagraph('Digital Evidence:', true, 8);
+      report.evidenceChecklist.digital.forEach(d => printParagraph(`[ ] ${d}`, false, 16));
+      printParagraph('Financial Records:', true, 8);
+      report.evidenceChecklist.financial.forEach(d => printParagraph(`[ ] ${d}`, false, 16));
+      printParagraph('Witnesses:', true, 8);
+      report.evidenceChecklist.witnesses.forEach(d => printParagraph(`[ ] ${d}`, false, 16));
+      y += 5;
+
+      // 7. Missing Info
+      printSectionHeader('7. MISSING INFORMATION TO GATHER');
+      report.missingInformation.forEach((m, i) => printParagraph(`${i + 1}. ${m}`, false, 8));
+      y += 5;
+
+      // 8. Legal Routes
+      printSectionHeader('8. POSSIBLE LEGAL ROUTES');
+      report.possibleLegalRoutes.forEach(r => {
+        printParagraph(r.route, true, 8);
+        printParagraph(r.explanation, false, 16);
+      });
+      y += 5;
+
+      // 9. Action Plan
+      printSectionHeader('9. STEP-BY-STEP ACTION PLAN');
+      report.actionPlan.forEach((a, i) => printParagraph(`${i + 1}. ${a}`, false, 8));
+      y += 5;
+
+      // 10. Questions for Lawyer
+      printSectionHeader('10. QUESTIONS TO ASK A QUALIFIED ADVOCATE');
+      report.questionsToAskALawyer.forEach((q, i) => printParagraph(`${i + 1}. ${q}`, false, 8));
+      y += 8;
+
+      // Disclaimer
+      checkPageBreak(45);
+      doc.setFillColor(254, 243, 199); // amber-100
+      doc.rect(margin, y, contentWidth, 38, 'F');
+      doc.setTextColor(146, 64, 14);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      const disLines = doc.splitTextToSize(`LEGAL DISCLAIMER: ${report.disclaimer}`, contentWidth - 16);
+      doc.text(disLines, margin + 8, y + 13);
+
+      const safeName = (report.caseSummary.title || 'Case').replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
+      doc.save(`NyayaSahayak_Case_Report_${safeName}.pdf`);
+    } catch (err: any) {
+      console.error('PDF generation error:', err);
+      alert('Failed to generate PDF. Downloading Markdown version instead.');
+      handleDownloadMarkdown();
+    } finally {
+      setGeneratingPdf(false);
+    }
   };
 
-  const handleCopyMarkdown = () => {
-    const md = `
+  const handlePrint = () => {
+    try {
+      window.print();
+    } catch (e) {
+      handleDownloadPdf();
+    }
+  };
+
+  const handleDownloadMarkdown = () => {
+    const md = generateMarkdownText();
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `NyayaSahayak_Case_Report_${Date.now()}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const generateMarkdownText = () => {
+    return `
 # NYAYASAHAYAK - CASE PREPARATION REPORT
 Generated on: ${new Date().toLocaleDateString('en-GB')}
 Status: ${report.caseSummary.currentStatus}
@@ -76,6 +261,10 @@ ${report.questionsToAskALawyer.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 ### LEGAL DISCLAIMER
 ${report.disclaimer}
 `;
+  };
+
+  const handleCopyMarkdown = () => {
+    const md = generateMarkdownText();
     navigator.clipboard.writeText(md);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
@@ -105,11 +294,28 @@ ${report.disclaimer}
 
         <div className="flex items-center gap-2">
           <button
+            onClick={handleDownloadPdf}
+            disabled={generatingPdf}
+            className="flex items-center gap-1.5 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2 rounded-lg shadow-sm transition-colors cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            <span>{generatingPdf ? 'Generating PDF...' : 'Download PDF'}</span>
+          </button>
+
+          <button
+            onClick={handleDownloadMarkdown}
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg transition-colors cursor-pointer"
+          >
+            <FileDown className="w-4 h-4" />
+            <span>Download .MD</span>
+          </button>
+
+          <button
             onClick={handleCopyMarkdown}
             className="flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg transition-colors cursor-pointer"
           >
             {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-            <span>{copied ? 'Copied Markdown!' : 'Copy Formatted Text'}</span>
+            <span>{copied ? 'Copied!' : 'Copy Text'}</span>
           </button>
 
           <button
@@ -117,15 +323,15 @@ ${report.disclaimer}
             className="flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg transition-colors cursor-pointer"
           >
             <Download className="w-4 h-4" />
-            <span>Download JSON</span>
+            <span>JSON</span>
           </button>
 
           <button
             onClick={handlePrint}
-            className="flex items-center gap-1.5 text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 px-4 py-2 rounded-lg shadow-sm transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 px-3 py-2 rounded-lg shadow-sm transition-colors cursor-pointer"
           >
             <Printer className="w-4 h-4 text-amber-400" />
-            <span>Print / Save as PDF</span>
+            <span>Print</span>
           </button>
         </div>
       </div>
