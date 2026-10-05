@@ -1,0 +1,6 @@
+{
+  "name": "NyayaSahayak",
+  "description": "AI-Powered Indian Legal Assistance System providing legal awareness, case preparation reports, document analysis, and procedural guidance for Indian citizens.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

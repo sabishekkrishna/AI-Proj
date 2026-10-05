@@ -1,0 +1,608 @@
+import { ai } from './geminiClient.ts';
+import { searchLegalSources, INDIAN_LEGAL_DATABASE, LegalSourceItem } from './legalKnowledgeBase.ts';
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface EmergencyInfo {
+  isEmergency: boolean;
+  type?: 'Physical Threat' | 'Domestic Violence' | 'Ongoing Cyber/Financial Fraud' | 'Child Endangerment' | 'Imminent Arrest';
+  message?: string;
+  helplines: { name: string; number: string; description: string }[];
+}
+
+export interface StructuredChatResponse {
+  understanding: string;
+  category: string;
+  relevantLaws: {
+    act: string;
+    section?: string;
+    status: string;
+    explanation: string;
+    verificationStatus: 'Verified' | 'Likely Relevant' | 'Requires Verification';
+  }[];
+  lawExplanation: string;
+  followUpQuestions: string[];
+  evidenceToPreserve: {
+    documents: string[];
+    digital: string[];
+    financial: string[];
+    witnesses: string[];
+  };
+  possibleNextSteps: string[];
+  possibleForum: string[];
+  urgencyAndTimeLimits: string;
+  importantWarning: string;
+  casePreparationOffer: string;
+  sources: { title: string; act: string; section?: string; url: string; verifiedDate: string }[];
+  emergency: EmergencyInfo;
+  simpleLanguageSummary?: string;
+}
+
+export function detectEmergency(text: string): EmergencyInfo {
+  const lower = text.toLowerCase();
+
+  const isCyberFraud =
+    (lower.includes('hacked') || lower.includes('otp') || lower.includes('debit card') || lower.includes('upi fraud') || lower.includes('money stolen') || lower.includes('cyber crime') || lower.includes('phishing')) &&
+    (lower.includes('today') || lower.includes('just now') || lower.includes('minutes ago') || lower.includes('urgent') || lower.includes('ongoing'));
+
+  const isDomesticViolence =
+    lower.includes('beating me') || lower.includes('hitting me') || lower.includes('husband beat') || lower.includes('in laws abuse') || lower.includes('domestic violence') || lower.includes('threatened to kill');
+
+  const isImminentDanger =
+    lower.includes('life in danger') || lower.includes('they are outside') || lower.includes('attacking me') || lower.includes('weapon') || lower.includes('suicide') || lower.includes('kill myself');
+
+  if (isImminentDanger) {
+    return {
+      isEmergency: true,
+      type: 'Physical Threat',
+      message: 'URGENT SAFETY ALERT: If you are in immediate physical danger, do not wait for legal advice. Contact emergency police assistance immediately.',
+      helplines: [
+        { name: 'National Emergency Number', number: '112', description: 'Immediate police, fire, and ambulance dispatch across India' },
+        { name: 'Police Control Room', number: '100', description: 'Local police emergency' }
+      ]
+    };
+  }
+
+  if (isDomesticViolence) {
+    return {
+      isEmergency: true,
+      type: 'Domestic Violence',
+      message: 'SAFETY NOTICE: If you are facing domestic abuse or threats to your personal safety, immediate confidential support is available.',
+      helplines: [
+        { name: 'National Women Helpline', number: '181', description: '24/7 toll-free crisis helpline for women in distress' },
+        { name: 'National Emergency Number', number: '112', description: 'Immediate police response' },
+        { name: 'National Legal Aid Helpline', number: '15100', description: 'Free legal aid and Protection Officer assistance' }
+      ]
+    };
+  }
+
+  if (isCyberFraud) {
+    return {
+      isEmergency: true,
+      type: 'Ongoing Cyber/Financial Fraud',
+      message: 'GOLDEN HOUR ACTION: If you lost money online within the last few hours, report immediately to freeze the suspect accounts before funds are withdrawn.',
+      helplines: [
+        { name: 'National Cyber Financial Fraud Helpline', number: '1930', description: 'Citizen Financial Cyber Fraud Reporting System to freeze fraudulent transactions' },
+        { name: 'National Cyber Crime Portal', number: 'cybercrime.gov.in', description: 'Official portal to register cyber crime complaints' }
+      ]
+    };
+  }
+
+  return {
+    isEmergency: false,
+    helplines: []
+  };
+}
+
+export async function generateLegalChatResponse(
+  userQuery: string,
+  history: ChatMessage[],
+  preferredLanguage: string = 'English',
+  explainLikeNew: boolean = false
+): Promise<StructuredChatResponse> {
+  const emergency = detectEmergency(userQuery);
+  const relevantSources = searchLegalSources(userQuery);
+
+  // RAG Context
+  const ragContext = relevantSources
+    .slice(0, 4)
+    .map(
+      s =>
+        `[ACT]: ${s.act}\n[SECTION]: ${s.section || 'General'}\n[TITLE]: ${s.title}\n[CATEGORY]: ${s.category}\n[STATUS]: ${s.currentStatus} (${s.oldEquivalent || 'No older reference'})\n[EXPLANATION]: ${s.simpleExplanation}\n[FORUMS]: ${s.relevantForums.join(', ')}\n[LIMITATION]: ${s.limitationPeriod || 'Subject to general Limitation Act'}\n[VERIFICATION]: ${s.confidence} (${s.verifiedDate})`
+    )
+    .join('\n---\n');
+
+  if (ai) {
+    try {
+      const systemInstruction = `
+You are NyayaSahayak, an AI legal-information assistant focused strictly on the Indian legal system.
+Your purpose is to help ordinary citizens understand legal concepts, organize facts, identify potentially relevant Indian legal provisions, identify evidence, and prepare questions for qualified legal professionals.
+
+CRITICAL RULES:
+1. You are NOT an advocate and NOT a substitute for a lawyer. Never guarantee any outcome or say "you will win/lose".
+2. Support CURRENT Indian Laws: Account for the criminal reform acts (Bharatiya Nyaya Sanhita 2023 [BNS], Bharatiya Nagarik Suraksha Sanhita 2023 [BNSS], Bharatiya Sakshya Adhiniyam 2023 [BSA]) which replaced IPC, CrPC, and Indian Evidence Act from 1 July 2024. Explicitly mention both current law and historical old sections when relevant so users understand both.
+3. NEVER hallucinate section numbers or judgments. If not completely confident, use "Likely Relevant" or "Requires Verification".
+4. Do NOT invent limitation periods. If unsure, state that limitation periods apply and must be verified.
+5. If user is in an emergency, prioritize safety and official helplines (112, 1930, 181, 15100).
+6. Response must be returned strictly formatted as valid JSON adhering to the target schema.
+7. Language setting: Respond in ${preferredLanguage}. ${explainLikeNew ? 'Use ultra-simple, everyday conversational language, explaining any legal term in simple analogies.' : 'Use clear, accessible language.'}
+`;
+
+      const prompt = `
+User Query: "${userQuery}"
+
+Retrieved Authoritative Indian Legal Sources (RAG):
+${ragContext || 'No direct statutory match in current seed index. Apply general Indian legal principles with cautious confidence.'}
+
+Previous conversation context:
+${history.slice(-4).map(h => `${h.role.toUpperCase()}: ${h.content}`).join('\n')}
+
+Format your output as a single valid JSON object with the following fields:
+{
+  "understanding": "Brief summary of what the user described",
+  "category": "One of the 22 Indian legal categories (e.g. Criminal Law, Rent/Tenancy, Employment/Labour, Consumer Protection, Cybercrime, Property Law, etc.)",
+  "relevantLaws": [
+    {
+      "act": "Act Name (e.g. Bharatiya Nyaya Sanhita, 2023 or Consumer Protection Act, 2019)",
+      "section": "Section if known or applicable",
+      "status": "Current Law or Historical Reference",
+      "explanation": "What this law generally means in simple language",
+      "verificationStatus": "Verified or Likely Relevant or Requires Verification"
+    }
+  ],
+  "lawExplanation": "Simple plain-language summary of what the legal position generally entails in India",
+  "followUpQuestions": ["Question 1", "Question 2", "Question 3", "Question 4"],
+  "evidenceToPreserve": {
+    "documents": ["Agreements, receipts, notices, etc."],
+    "digital": ["WhatsApp chats, emails, call logs, screenshots"],
+    "financial": ["Bank statements, UPI transactions, invoices"],
+    "witnesses": ["Colleagues, neighbours, third parties who saw or heard"]
+  },
+  "possibleNextSteps": ["Step 1", "Step 2", "Step 3", "Step 4"],
+  "possibleForum": ["Where the user can go: Police, Consumer Forum, Civil Court, Labour Commissioner, etc."],
+  "urgencyAndTimeLimits": "Applicable limitation period or procedural time constraints (explicitly state to verify with an advocate)",
+  "importantWarning": "Major legal risk, jurisdictional caveat, or procedural caution",
+  "casePreparationOffer": "Would you like me to prepare a Case Preparation Report from the information you have provided?",
+  "simpleLanguageSummary": "A 2-3 sentence ultra-clear summary for someone who has never studied law"
+}
+`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json'
+        }
+      });
+
+      const parsed = JSON.parse(response.text?.trim() || '{}');
+      return {
+        understanding: parsed.understanding || `Based on your description, this issue relates to ${parsed.category || 'an Indian legal matter'}.`,
+        category: parsed.category || (relevantSources[0]?.category || 'General Civil/Criminal Matter'),
+        relevantLaws: parsed.relevantLaws || relevantSources.map(s => ({
+          act: s.act,
+          section: s.section,
+          status: s.currentStatus,
+          explanation: s.simpleExplanation,
+          verificationStatus: s.confidence
+        })),
+        lawExplanation: parsed.lawExplanation || (relevantSources[0]?.simpleExplanation || 'Under Indian law, remedies depend on whether this constitutes a civil wrong or criminal offence.'),
+        followUpQuestions: parsed.followUpQuestions || [
+          'When did this incident or dispute first occur?',
+          'Do you have written agreements, payment receipts, or text messages?',
+          'Which Indian state and district are you located in?',
+          'Have you sent any formal written communication or notice to the other party?'
+        ],
+        evidenceToPreserve: parsed.evidenceToPreserve || {
+          documents: ['Any written agreements, bills, or notices'],
+          digital: ['WhatsApp conversations, emails, and call records'],
+          financial: ['Bank account statements, UPI payment receipts'],
+          witnesses: ['Persons who witnessed the transactions or dispute']
+        },
+        possibleNextSteps: parsed.possibleNextSteps || [
+          'Preserve all communication and documents without altering them.',
+          'Compile a chronological timeline of events and dates.',
+          'Send a formal written request or legal notice through an advocate if required.',
+          'Approach the appropriate jurisdictional forum or authority.'
+        ],
+        possibleForum: parsed.possibleForum || (relevantSources[0]?.relevantForums || ['District Civil Court', 'Local Police Station / Consumer Commission']),
+        urgencyAndTimeLimits: parsed.urgencyAndTimeLimits || 'Limitation periods in India generally range from 30 days to 3 years depending on the forum. Verify the specific period with an advocate.',
+        importantWarning: parsed.importantWarning || 'This is general legal information and not professional legal advice. Always consult a qualified advocate before filing proceedings.',
+        casePreparationOffer: 'Would you like me to prepare a structured Case Preparation Report from the details you have provided?',
+        sources: relevantSources.map(s => ({
+          title: s.title,
+          act: s.act,
+          section: s.section,
+          url: s.sourceUrl,
+          verifiedDate: s.verifiedDate
+        })),
+        emergency,
+        simpleLanguageSummary: parsed.simpleLanguageSummary
+      };
+    } catch (err) {
+      console.warn('Gemini API call failed, falling back to deterministic Indian Legal RAG engine:', err);
+    }
+  }
+
+  // Deterministic Fallback Engine (Runs whenever GEMINI_API_KEY is not set or network fails)
+  const topSource = relevantSources[0] || INDIAN_LEGAL_DATABASE[0];
+  const queryLower = userQuery.toLowerCase();
+
+  let determinedCategory = topSource.category;
+  if (queryLower.includes('salary') || queryLower.includes('employer') || queryLower.includes('job') || queryLower.includes('fired')) {
+    determinedCategory = 'Employment/Labour';
+  } else if (queryLower.includes('landlord') || queryLower.includes('deposit') || queryLower.includes('rent') || queryLower.includes('flat')) {
+    determinedCategory = 'Rent/Tenancy';
+  } else if (queryLower.includes('cheated') || queryLower.includes('scam') || queryLower.includes('upi') || queryLower.includes('cyber')) {
+    determinedCategory = 'Cybercrime';
+  } else if (queryLower.includes('product') || queryLower.includes('defective') || queryLower.includes('warranty') || queryLower.includes('flipkart') || queryLower.includes('amazon')) {
+    determinedCategory = 'Consumer Protection';
+  } else if (queryLower.includes('cheque') || queryLower.includes('bounced') || queryLower.includes('loan')) {
+    determinedCategory = 'Banking/Financial Fraud';
+  } else if (queryLower.includes('accident') || queryLower.includes('car') || queryLower.includes('bike') || queryLower.includes('mact')) {
+    determinedCategory = 'Motor Vehicle/Accident';
+  } else if (queryLower.includes('wife') || queryLower.includes('husband') || queryLower.includes('domestic') || queryLower.includes('beating')) {
+    determinedCategory = 'Domestic Violence';
+  } else if (queryLower.includes('land') || queryLower.includes('plot') || queryLower.includes('property') || queryLower.includes('encroach')) {
+    determinedCategory = 'Property Law';
+  } else if (queryLower.includes('police') || queryLower.includes('fir') || queryLower.includes('refuse')) {
+    determinedCategory = 'Criminal Law';
+  }
+
+  const categorySources = INDIAN_LEGAL_DATABASE.filter(s => s.category === determinedCategory);
+  const primaryLaw = categorySources[0] || topSource;
+
+  return {
+    understanding: `From what you have described, your issue appears to involve ${determinedCategory.toLowerCase()} regarding "${userQuery.slice(0, 90)}...".`,
+    category: determinedCategory,
+    relevantLaws: [
+      {
+        act: primaryLaw.act,
+        section: primaryLaw.section,
+        status: primaryLaw.currentStatus,
+        explanation: primaryLaw.simpleExplanation,
+        verificationStatus: primaryLaw.confidence
+      },
+      ...(primaryLaw.oldEquivalent
+        ? [
+            {
+              act: primaryLaw.oldEquivalent,
+              section: undefined,
+              status: 'Historical Reference' as const,
+              explanation: 'Former statutory provision applicable before recent reforms.',
+              verificationStatus: 'Verified' as const
+            }
+          ]
+        : [])
+    ],
+    lawExplanation: primaryLaw.simpleExplanation + ' ' + primaryLaw.fullProvisionsSummary,
+    followUpQuestions: [
+      'What is the exact date or time frame when this occurred?',
+      'Which Indian State and District did this event take place in?',
+      'Do you have any written agreements, invoices, receipts, or chat logs?',
+      'Have you already issued a written notice, letter, or registered complaint?'
+    ],
+    evidenceToPreserve: {
+      documents: ['Formal agreements, contract letters, receipts, or registered notices'],
+      digital: ['WhatsApp / SMS conversations, emails, and screenshots with timestamps'],
+      financial: ['Bank passbook entries, account statements, and UPI/NEFT transaction IDs'],
+      witnesses: ['Any colleagues, family members, or witnesses present at the scene']
+    },
+    possibleNextSteps: [
+      'Preserve and organize all relevant documents and electronic evidence.',
+      'Prepare a clear chronological timeline of events.',
+      'Send a formal written demand or legal notice via registered post / speed post.',
+      `Approach the appropriate forum (${primaryLaw.relevantForums[0] || 'Jurisdictional Court'}).`,
+      'Consult a licensed advocate to formalize your legal petition.'
+    ],
+    possibleForum: primaryLaw.relevantForums,
+    urgencyAndTimeLimits: primaryLaw.limitationPeriod || 'Statutory limitation period applies. Verify the current limitation window under the Limitation Act, 1963 with an advocate.',
+    importantWarning: 'Important: This is general educational legal guidance. Procedures and state-specific amendments vary. Do not rely solely on automated summaries for court proceedings.',
+    casePreparationOffer: 'Would you like me to prepare a Case Preparation Report from the details you provided?',
+    sources: [
+      {
+        title: primaryLaw.title,
+        act: primaryLaw.act,
+        section: primaryLaw.section,
+        url: primaryLaw.sourceUrl,
+        verifiedDate: primaryLaw.verifiedDate
+      }
+    ],
+    emergency,
+    simpleLanguageSummary: explainLikeNew
+      ? `In plain words: You may have a legitimate legal right to seek a remedy under ${primaryLaw.act}. Make sure you keep your documents safe and don't delay reaching out to the right authority.`
+      : undefined
+  };
+}
+
+export async function analyzeLegalDocument(documentText: string, documentName: string = 'Uploaded Document') {
+  if (ai) {
+    try {
+      const prompt = `
+Analyze the following Indian legal document text.
+Document Title/Filename: "${documentName}"
+Text:
+"""
+${documentText.slice(0, 15000)}
+"""
+
+Provide a comprehensive, objective analysis strictly formatted as JSON:
+{
+  "documentType": "Type of document (e.g. Legal Notice, Residential Rental Agreement, Employment Agreement, Police FIR, Consumer Complaint, Promissory Note, Court Summons)",
+  "summary": "Clear executive summary of the document in 3-4 sentences",
+  "partiesInvolved": [
+    {"name": "Party Name", "role": "Role e.g. Landlord/Tenant, Complainant/Accused, Employer/Employee", "obligations": "Key duties"}
+  ],
+  "criticalDatesAndDeadlines": [
+    {"dateOrPeriod": "e.g. Within 15 days of receipt", "significance": "Why this deadline matters"}
+  ],
+  "keyClausesAndProvisions": [
+    {"clauseTitle": "Title", "contentSummary": "Summary", "implication": "What this means for the user"}
+  ],
+  "difficultLegalTerms": [
+    {"term": "Legal Term e.g. Indefeasible, Force Majeure, Ex-Parte, Liquidated Damages", "explanation": "Simple everyday definition"}
+  ],
+  "highRiskClausesOrRedFlags": [
+    "Any clause that is one-sided, unfair, forfeiture-heavy, or legally questionable"
+  ],
+  "questionsToAskALawyer": [
+    "Specific questions the user should take to an advocate regarding this document"
+  ],
+  "missingInformation": [
+    "Missing elements like signature, stamp duty, date, schedule of property, or arbitration seat"
+  ],
+  "educationalDisclaimer": "This analysis is informational and does not determine legal validity or constitute formal legal opinion."
+}
+`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json'
+        }
+      });
+
+      return JSON.parse(response.text?.trim() || '{}');
+    } catch (err) {
+      console.warn('Gemini document analyzer fallback triggered:', err);
+    }
+  }
+
+  // Deterministic Fallback Document Analysis
+  const isNotice = documentText.toLowerCase().includes('notice') || documentText.toLowerCase().includes('advocate');
+  const isAgreement = documentText.toLowerCase().includes('agreement') || documentText.toLowerCase().includes('lessor') || documentText.toLowerCase().includes('tenant');
+  const isFIR = documentText.toLowerCase().includes('fir') || documentText.toLowerCase().includes('police') || documentText.toLowerCase().includes('complainant');
+
+  const docType = isNotice ? 'Legal Demand Notice' : isAgreement ? 'Agreement / Contract' : isFIR ? 'Police Information / FIR' : 'Legal Correspondence';
+
+  return {
+    documentType: docType,
+    summary: `This document appears to be a ${docType}. It outlines terms, demands, or statements between the parties.`,
+    partiesInvolved: [
+      { name: 'Issuing / First Party', role: 'Claimant / Sender', obligations: 'Asserting claims or contractual terms' },
+      { name: 'Recipient / Second Party', role: 'Respondent / Recipient', obligations: 'Review obligations and reply within designated timeframe' }
+    ],
+    criticalDatesAndDeadlines: [
+      { dateOrPeriod: 'Typically 15 to 30 days', significance: 'Standard notice response or dispute resolution window under Indian procedure' }
+    ],
+    keyClausesAndProvisions: [
+      { clauseTitle: 'Subject Matter of Dispute', contentSummary: 'States the background facts and alleged violation.', implication: 'Sets the foundational record for future court filings.' }
+    ],
+    difficultLegalTerms: [
+      { term: 'Without Prejudice', explanation: 'Statements made without conceding any liability or waiving legal rights.' },
+      { term: 'Cause of Action', explanation: 'The set of facts that gives a person the legal right to seek judicial remedy.' }
+    ],
+    highRiskClausesOrRedFlags: [
+      'Check whether the timeline given for reply is unusually short (e.g. 7 days).',
+      'Verify if any unilateral penalty or forfeiture clause is invoked.'
+    ],
+    questionsToAskALawyer: [
+      'Is a formal reply notice legally mandatory within the stated period?',
+      'Does this document contain any admissions that could harm my legal defense?',
+      'What are the chances of settling this dispute through mutual mediation?'
+    ],
+    missingInformation: [
+      'Verify whether proper postal tracking receipts or date of service are recorded.',
+      'Check whether the document is supported by requisite Indian Stamp Duty where required by state law.'
+    ],
+    educationalDisclaimer: 'This analysis is informational and does not determine legal validity or constitute formal legal opinion.'
+  };
+}
+
+export async function generateCasePreparationReport(caseData: {
+  title: string;
+  category: string;
+  userRole: string;
+  opposingParty: string;
+  state: string;
+  district?: string;
+  dateOfIncident: string;
+  facts: string[];
+  parties: { name: string; role: string; details: string }[];
+  timeline: { date: string; event: string }[];
+  evidence: { name: string; type: string; description: string }[];
+  desiredOutcome?: string;
+}) {
+  const relevantSources = searchLegalSources(caseData.category + ' ' + caseData.facts.join(' '));
+
+  if (ai) {
+    try {
+      const prompt = `
+Create a comprehensive, production-grade Case Preparation Report for an Indian citizen preparing to consult an advocate or approach an authority.
+Adhere strictly to Section 7 of NyayaSahayak specifications.
+
+Case Details:
+- Title: ${caseData.title}
+- Category: ${caseData.category}
+- User Role: ${caseData.userRole || 'Complainant / Aggrieved Party'}
+- Opposing Party: ${caseData.opposingParty || 'Opposing Party'}
+- State & District: ${caseData.state || 'Not specified'}, ${caseData.district || 'Not specified'}
+- Date of Incident: ${caseData.dateOfIncident || 'Not specified'}
+- Desired Outcome: ${caseData.desiredOutcome || 'Legal remedy and compensation/refund'}
+- Facts: ${JSON.stringify(caseData.facts)}
+- Parties: ${JSON.stringify(caseData.parties)}
+- Timeline: ${JSON.stringify(caseData.timeline)}
+- Evidence Listed: ${JSON.stringify(caseData.evidence)}
+
+Retrieved Relevant Statutory Knowledge:
+${relevantSources.map(s => `${s.act} (${s.section || ''}): ${s.title} - ${s.simpleExplanation}`).join('\n')}
+
+Format as JSON:
+{
+  "caseSummary": {
+    "title": "${caseData.title}",
+    "userRole": "${caseData.userRole || 'Complainant'}",
+    "opposingParty": "${caseData.opposingParty || 'Not provided'}",
+    "category": "${caseData.category}",
+    "location": "${caseData.state || 'India'}",
+    "incidentDate": "${caseData.dateOfIncident || 'Not provided'}",
+    "currentStatus": "Case Preparation / Pre-Litigation"
+  },
+  "factsOfTheCase": [
+    "Chronological fact statement without inventing facts. Use 'Not provided' for missing details."
+  ],
+  "partiesInvolved": [
+    {"name": "...", "role": "...", "details": "..."}
+  ],
+  "importantDates": [
+    {"date": "...", "event": "..."}
+  ],
+  "legalIssues": [
+    "Whether the conduct violated applicable statutory provisions...",
+    "Whether a civil remedy or criminal complaint is warranted...",
+    "Which forum possesses pecuniary and territorial jurisdiction..."
+  ],
+  "possiblyRelevantLaws": [
+    {
+      "name": "Act Name (BNS 2023, BNSS 2023, Consumer Protection Act 2019, etc.)",
+      "provision": "Section if confidently identified",
+      "simpleExplanation": "Plain-English explanation",
+      "whyRelevant": "Why it applies to the user's facts",
+      "verificationStatus": "Verified or Likely Relevant"
+    }
+  ],
+  "evidenceChecklist": {
+    "documents": ["Agreements, bills, notices, vouchers"],
+    "digital": ["WhatsApp, email, call records (Section 63 BSA certificate needed)"],
+    "financial": ["Bank statements, payment slips, UPI vouchers"],
+    "witnesses": ["Witness list with relationship and statement summary"]
+  },
+  "missingInformation": [
+    "Information user still needs to collect or confirm"
+  ],
+  "possibleLegalRoutes": [
+    {"route": "Route A: Informal Resolution / Amicable Settlement", "explanation": "..."},
+    {"route": "Route B: Statutory Legal Demand Notice", "explanation": "..."},
+    {"route": "Route C: Administrative / Police / Tribunal Complaint", "explanation": "..."},
+    {"route": "Route D: Civil / Criminal Court Proceedings", "explanation": "..."},
+    {"route": "Route E: Alternative Dispute Resolution (Mediation / Lok Adalat)", "explanation": "..."}
+  ],
+  "possibleForum": {
+    "recommendedForums": ["..."],
+    "jurisdictionCaveat": "Jurisdiction depends on pecuniary value, territorial cause of action, and state statutes."
+  },
+  "actionPlan": [
+    "1. Preserve all electronic records and apply for Section 63 BSA certificate if needed.",
+    "2. Compile verified chronological timeline.",
+    "3. Issue statutory notice through advocate.",
+    "4. Approach appropriate forum."
+  ],
+  "questionsToAskALawyer": [
+    "Personalized questions for the advocate"
+  ],
+  "disclaimer": "This Case Preparation Report is generated for organizational and informational purposes. It does not constitute legal representation or legal advice. All facts and legal provisions must be verified with a practicing advocate."
+}
+`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json'
+        }
+      });
+
+      return JSON.parse(response.text?.trim() || '{}');
+    } catch (err) {
+      console.warn('Gemini report generator fallback triggered:', err);
+    }
+  }
+
+  // Fallback Case Preparation Report generator
+  const primarySource = relevantSources[0] || INDIAN_LEGAL_DATABASE[0];
+
+  return {
+    caseSummary: {
+      title: caseData.title || 'Legal Matter Assessment',
+      userRole: caseData.userRole || 'Aggrieved Party / Complainant',
+      opposingParty: caseData.opposingParty || 'Opposing Party (Not provided)',
+      category: caseData.category || 'General Civil/Criminal Matter',
+      location: caseData.state ? `${caseData.district ? caseData.district + ', ' : ''}${caseData.state}` : 'Not provided',
+      incidentDate: caseData.dateOfIncident || 'Not provided',
+      currentStatus: 'Case Preparation / Pre-Litigation Stage'
+    },
+    factsOfTheCase: caseData.facts.length > 0 ? caseData.facts : ['User has documented an initial dispute concerning their legal rights under Indian law.'],
+    partiesInvolved: caseData.parties.length > 0 ? caseData.parties : [
+      { name: 'Complainant', role: 'Aggrieved Party', details: caseData.userRole || 'Initiating inquiry' },
+      { name: caseData.opposingParty || 'Opposing Party', role: 'Respondent', details: 'Counterparty to the dispute' }
+    ],
+    importantDates: caseData.timeline.length > 0 ? caseData.timeline : [
+      { date: caseData.dateOfIncident || 'Date not provided', event: 'Initial occurrence of dispute or transaction' }
+    ],
+    legalIssues: [
+      `Whether the opposing party's conduct violates provisions of ${primarySource.act}.`,
+      'Whether the matter falls under civil, consumer, labour, or criminal jurisdiction.',
+      'What immediate procedural steps and limitation periods apply.'
+    ],
+    possiblyRelevantLaws: [
+      {
+        name: primarySource.act,
+        provision: primarySource.section || 'General Provisions',
+        simpleExplanation: primarySource.simpleExplanation,
+        whyRelevant: `Appears directly applicable to ${caseData.category} disputes under Indian law.`,
+        verificationStatus: primarySource.confidence
+      }
+    ],
+    evidenceChecklist: {
+      documents: caseData.evidence.filter(e => e.type === 'document').map(e => e.name).concat(['Written agreements, receipts, and invoices']),
+      digital: caseData.evidence.filter(e => e.type === 'digital').map(e => e.name).concat(['WhatsApp chats, emails, and call recordings']),
+      financial: caseData.evidence.filter(e => e.type === 'financial').map(e => e.name).concat(['Bank statements and UPI transaction proofs']),
+      witnesses: caseData.evidence.filter(e => e.type === 'witness').map(e => e.name).concat(['Any person who was present during the transaction'])
+    },
+    missingInformation: [
+      'Exact chronological dates of all notices or communications',
+      'Certified bank passbook statements or audited invoices',
+      'Territorial jurisdiction validation based on where the agreement was signed or cause of action arose'
+    ],
+    possibleLegalRoutes: [
+      { route: 'Route A: Informal Resolution', explanation: 'Attempt written settlement or compromise.' },
+      { route: 'Route B: Legal Notice', explanation: 'Send a formal statutory legal notice through an advocate giving 15 to 30 days.' },
+      { route: 'Route C: Statutory Complaint', explanation: `File complaint before ${primarySource.relevantForums[0] || 'appropriate authority'}.` },
+      { route: 'Route D: Court Proceedings', explanation: 'Initiate formal civil suit or criminal proceedings.' },
+      { route: 'Route E: Alternative Dispute Resolution', explanation: 'Explore mediation or Lok Adalat for quick settlement.' }
+    ],
+    possibleForum: {
+      recommendedForums: primarySource.relevantForums,
+      jurisdictionCaveat: 'Jurisdiction depends on pecuniary limits and geographical location where cause of action arose.'
+    },
+    actionPlan: [
+      '1. Preserve all electronic records and communication securely.',
+      '2. Complete the factual chronological timeline.',
+      '3. Gather all physical and digital evidence into a case binder.',
+      '4. Send a formal legal notice if advised by an advocate.',
+      '5. Approach the designated forum before limitation expires.'
+    ],
+    questionsToAskALawyer: [
+      `Which exact statutory section under current law (${primarySource.act}) applies best?`,
+      'What is the precise limitation deadline for instituting legal action?',
+      'What are the realistic costs, court fees, and expected timeframe for this forum?',
+      'Which piece of evidence is strongest in my case?'
+    ],
+    disclaimer: 'This Case Preparation Report is generated for informational and organizational purposes. It does not constitute legal representation or legal advice. All facts and legal provisions must be verified with a practicing advocate.'
+  };
+}

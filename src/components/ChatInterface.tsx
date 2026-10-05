@@ -1,0 +1,578 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Send, Mic, MicOff, AlertCircle, FileCheck, ArrowRight, ShieldCheck, Scale, CheckCircle2, HelpCircle, ExternalLink, Sparkles, RefreshCw, BookmarkPlus, Copy, Check } from 'lucide-react';
+import { StructuredChatResponse, ChatMessageItem, CaseRecord } from '../types';
+import { sendChatMessage } from '../services/apiService';
+
+interface ChatInterfaceProps {
+  preferredLanguage: string;
+  explainLikeNew: boolean;
+  onPrepareReportFromChat: (initialData: Partial<CaseRecord>) => void;
+  onNavigateToTab: (tab: string) => void;
+}
+
+const QUICK_PROMPTS = [
+  'My employer has not paid my salary for 2 months.',
+  'My landlord is refusing to return my security deposit.',
+  'I was cheated in an online UPI transfer fraud.',
+  'Local police station is refusing to register an FIR.',
+  'I received a registered legal notice for breach of agreement.',
+  'I bought a defective laptop and the brand denies warranty.'
+];
+
+export default function ChatInterface({
+  preferredLanguage,
+  explainLikeNew,
+  onPrepareReportFromChat,
+  onNavigateToTab
+}: ChatInterfaceProps) {
+  const [messages, setMessages] = useState<ChatMessageItem[]>([
+    {
+      id: 'welcome-msg',
+      sender: 'assistant',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text: `Namaste! I am NyayaSahayak, your Indian legal awareness and case-preparation assistant.\n\nDescribe your legal situation or problem in your own words (in English, Hindi, or your preferred language). I will help you understand relevant Indian laws, identify essential evidence, and guide you on what to ask a qualified advocate.`
+    }
+  ]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const speechRecognitionRef = useRef<any>(null);
+
+  // Auto scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
+
+  // Voice Recognition setup
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = preferredLanguage === 'Hindi' ? 'hi-IN' : preferredLanguage === 'Tamil' ? 'ta-IN' : 'en-IN';
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInput(prev => (prev ? `${prev} ${transcript}` : transcript));
+        setIsListening(false);
+      };
+
+      recognition.onerror = () => {
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      speechRecognitionRef.current = recognition;
+    }
+  }, [preferredLanguage]);
+
+  const toggleVoice = () => {
+    if (!speechRecognitionRef.current) {
+      alert('Speech recognition is not supported in this browser. Please use Google Chrome or type your question.');
+      return;
+    }
+
+    if (isListening) {
+      speechRecognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      try {
+        speechRecognitionRef.current.start();
+        setIsListening(true);
+      } catch (e) {
+        setIsListening(false);
+      }
+    }
+  };
+
+  const handleSend = async (queryText?: string) => {
+    const textToSend = (queryText || input).trim();
+    if (!textToSend || isLoading) return;
+
+    const userMsg: ChatMessageItem = {
+      id: `user-${Date.now()}`,
+      sender: 'user',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text: textToSend
+    };
+
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const history = messages
+        .filter(m => m.text)
+        .slice(-6)
+        .map(m => ({
+          role: m.sender === 'user' ? ('user' as const) : ('assistant' as const),
+          content: m.text || ''
+        }));
+
+      const res = await sendChatMessage(textToSend, history, preferredLanguage, explainLikeNew);
+
+      const assistantMsg: ChatMessageItem = {
+        id: `asst-${Date.now()}`,
+        sender: 'assistant',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        structuredResponse: res
+      };
+
+      setMessages(prev => [...prev, assistantMsg]);
+    } catch (err: any) {
+      const errorMsg: ChatMessageItem = {
+        id: `err-${Date.now()}`,
+        sender: 'assistant',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text: `I encountered an issue retrieving legal information: ${err.message || 'Please check your connection and try again.'}`
+      };
+      setMessages(prev => [...prev, errorMsg]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCopyText = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-140px)] min-h-[600px] max-w-6xl mx-auto bg-slate-50 border border-slate-200/80 rounded-2xl shadow-xl overflow-hidden my-4">
+      {/* Chat Header Bar */}
+      <div className="bg-slate-900 text-white px-5 py-3.5 flex items-center justify-between border-b border-slate-800">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+            <Scale className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-white">NyayaSahayak AI Legal Assistant</h2>
+              <span className="text-[10px] font-medium bg-emerald-950 text-emerald-300 border border-emerald-800/80 px-1.5 py-0.2 rounded-full">
+                Active
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Grounded in Current Indian Laws (BNS, BNSS, BSA, CPA 2019, IT Act)
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {explainLikeNew && (
+            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] bg-amber-500/10 border border-amber-500/30 text-amber-300 px-2 py-0.5 rounded-full">
+              <HelpCircle className="w-3 h-3" /> Simple Language Mode Active
+            </span>
+          )}
+          <button
+            onClick={() => {
+              setMessages([
+                {
+                  id: 'welcome-reset',
+                  sender: 'assistant',
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  text: 'Chat history cleared. How may I assist you with your Indian legal questions today?'
+                }
+              ]);
+            }}
+            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+            title="Reset conversation"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Messages Scroll Area */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+        {messages.map(msg => {
+          if (msg.sender === 'user') {
+            return (
+              <div key={msg.id} className="flex justify-end">
+                <div className="max-w-2xl bg-slate-900 text-white rounded-2xl rounded-tr-xs px-4 py-3 shadow-md">
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                  <div className="text-[10px] text-slate-400 text-right mt-1.5">{msg.timestamp}</div>
+                </div>
+              </div>
+            );
+          }
+
+          // Simple Text message from Assistant
+          if (!msg.structuredResponse) {
+            return (
+              <div key={msg.id} className="flex justify-start">
+                <div className="max-w-2xl bg-white border border-slate-200/90 rounded-2xl rounded-tl-xs p-4 shadow-sm text-slate-800">
+                  <div className="flex items-center gap-2 mb-2 pb-1.5 border-b border-slate-100 text-xs font-semibold text-slate-700">
+                    <Scale className="w-3.5 h-3.5 text-amber-600" />
+                    <span>NyayaSahayak Legal Guide</span>
+                  </div>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-800">{msg.text}</p>
+                  <div className="text-[10px] text-slate-400 mt-2">{msg.timestamp}</div>
+                </div>
+              </div>
+            );
+          }
+
+          // Full Structured 11-Part Response Card
+          const r = msg.structuredResponse;
+          return (
+            <div key={msg.id} className="flex justify-start w-full">
+              <div className="w-full max-w-4xl bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-md space-y-5 text-slate-800">
+                {/* Emergency Alert Banner (if detected) */}
+                {r.emergency?.isEmergency && (
+                  <div className="bg-red-50 border-2 border-red-500 rounded-xl p-4 text-red-950 space-y-2">
+                    <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
+                      <AlertCircle className="w-5 h-5 shrink-0" />
+                      <span>{r.emergency.type}: Immediate Official Assistance Required</span>
+                    </div>
+                    <p className="text-xs text-red-900 leading-relaxed font-medium">
+                      {r.emergency.message}
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                      {r.emergency.helplines.map((h, i) => (
+                        <div key={i} className="bg-white border border-red-200 rounded-lg p-2.5 flex items-center justify-between">
+                          <div>
+                            <div className="text-xs font-semibold text-red-950">{h.name}</div>
+                            <div className="text-[11px] text-red-700">{h.description}</div>
+                          </div>
+                          <span className="text-base font-extrabold text-red-600 px-2 py-1 bg-red-100/70 rounded">
+                            {h.number}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 1. Understanding & Legal Category Header */}
+                <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <span className="text-xs uppercase tracking-wider font-bold text-amber-700 block mb-1">
+                      1. Understanding Your Situation
+                    </span>
+                    <h3 className="text-base font-semibold text-slate-900">{r.understanding}</h3>
+                  </div>
+                  <div className="shrink-0">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-900 text-amber-400 border border-slate-800">
+                      <Scale className="w-3 h-3" />
+                      {r.category}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Simple Language Summary (if Explain Like I'm New is active) */}
+                {r.simpleLanguageSummary && (
+                  <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3.5 text-xs text-amber-950">
+                    <div className="font-semibold text-amber-900 mb-1 flex items-center gap-1.5">
+                      <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Plain-Language Summary (New to Law):</span>
+                    </div>
+                    <p className="leading-relaxed">{r.simpleLanguageSummary}</p>
+                  </div>
+                )}
+
+                {/* 3 & 4. Relevant Laws and Meaning */}
+                <div className="space-y-3">
+                  <div className="text-xs uppercase tracking-wider font-bold text-slate-500">
+                    3. Laws That May Be Relevant & 4. What the Law Means
+                  </div>
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {r.relevantLaws.map((law, idx) => (
+                      <div key={idx} className="bg-slate-50 border border-slate-200/90 rounded-xl p-3.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                          <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                            <span>{law.act}</span>
+                            {law.section && (
+                              <span className="bg-amber-100 text-amber-900 text-xs px-2 py-0.5 rounded font-mono font-semibold">
+                                {law.section}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                                law.verificationStatus === 'Verified'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : law.verificationStatus === 'Likely Relevant'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {law.verificationStatus}
+                            </span>
+                            <span className="text-[11px] text-slate-500">({law.status})</span>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-700 leading-relaxed">{law.explanation}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-slate-600 bg-slate-50/50 p-2.5 rounded-lg border border-slate-100 italic">
+                    {r.lawExplanation}
+                  </p>
+                </div>
+
+                {/* 5. Important Follow-up Questions */}
+                {r.followUpQuestions && r.followUpQuestions.length > 0 && (
+                  <div className="bg-blue-50/60 border border-blue-100 rounded-xl p-4 space-y-2">
+                    <span className="text-xs uppercase tracking-wider font-bold text-blue-900 block">
+                      5. Important Questions to Answer
+                    </span>
+                    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-blue-950">
+                      {r.followUpQuestions.map((q, idx) => (
+                        <li key={idx} className="flex items-start gap-1.5">
+                          <span className="text-blue-600 font-bold shrink-0">•</span>
+                          <span>{q}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* 6. Evidence You Should Preserve */}
+                <div className="space-y-2">
+                  <span className="text-xs uppercase tracking-wider font-bold text-slate-500 block">
+                    6. Evidence You Should Preserve
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg">
+                      <div className="font-semibold text-slate-900 mb-1 text-[11px] uppercase tracking-wide">
+                        📄 Documents
+                      </div>
+                      <ul className="space-y-1 text-slate-600">
+                        {r.evidenceToPreserve.documents.map((d, i) => (
+                          <li key={i}>• {d}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg">
+                      <div className="font-semibold text-slate-900 mb-1 text-[11px] uppercase tracking-wide">
+                        💬 Digital Proofs
+                      </div>
+                      <ul className="space-y-1 text-slate-600">
+                        {r.evidenceToPreserve.digital.map((d, i) => (
+                          <li key={i}>• {d}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg">
+                      <div className="font-semibold text-slate-900 mb-1 text-[11px] uppercase tracking-wide">
+                        💳 Financial Proofs
+                      </div>
+                      <ul className="space-y-1 text-slate-600">
+                        {r.evidenceToPreserve.financial.map((d, i) => (
+                          <li key={i}>• {d}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg">
+                      <div className="font-semibold text-slate-900 mb-1 text-[11px] uppercase tracking-wide">
+                        👥 Witnesses
+                      </div>
+                      <ul className="space-y-1 text-slate-600">
+                        {r.evidenceToPreserve.witnesses.map((d, i) => (
+                          <li key={i}>• {d}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 7 & 8. Next Steps & Possible Forum */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="bg-emerald-50/60 border border-emerald-100 p-3.5 rounded-xl space-y-1.5">
+                    <span className="font-bold text-emerald-950 uppercase tracking-wider block">
+                      7. Possible Next Steps
+                    </span>
+                    <ol className="space-y-1 text-emerald-950 list-decimal list-inside">
+                      {r.possibleNextSteps.map((step, idx) => (
+                        <li key={idx} className="leading-relaxed">{step}</li>
+                      ))}
+                    </ol>
+                  </div>
+
+                  <div className="bg-purple-50/60 border border-purple-100 p-3.5 rounded-xl space-y-1.5">
+                    <span className="font-bold text-purple-950 uppercase tracking-wider block">
+                      8. Possible Forum / Authority
+                    </span>
+                    <ul className="space-y-1 text-purple-950">
+                      {r.possibleForum.map((f, idx) => (
+                        <li key={idx} className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+
+                {/* 9 & 10. Urgency/Limitation & Warning */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl">
+                    <span className="font-bold text-amber-900 block mb-1">
+                      9. Urgency & Time Limits (Limitation Period)
+                    </span>
+                    <p className="text-amber-950 leading-relaxed">{r.urgencyAndTimeLimits}</p>
+                  </div>
+
+                  <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl">
+                    <span className="font-bold text-slate-900 block mb-1">
+                      10. Important Warning & Caveat
+                    </span>
+                    <p className="text-slate-700 leading-relaxed">{r.importantWarning}</p>
+                  </div>
+                </div>
+
+                {/* Sources List */}
+                {r.sources && r.sources.length > 0 && (
+                  <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                    <span className="font-semibold text-slate-600">Authoritative Sources:</span>
+                    {r.sources.map((s, idx) => (
+                      <a
+                        key={idx}
+                        href={s.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-slate-700 hover:text-amber-700 bg-slate-100 hover:bg-amber-50 px-2 py-0.5 rounded border border-slate-200 transition-colors"
+                      >
+                        <span>{s.act} {s.section || ''}</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    ))}
+                  </div>
+                )}
+
+                {/* 11. Case Preparation Action Banner */}
+                <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 text-white p-4 rounded-xl">
+                  <div>
+                    <div className="text-sm font-semibold text-white flex items-center gap-1.5">
+                      <FileCheck className="w-4 h-4 text-amber-400" />
+                      <span>{r.casePreparationOffer}</span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      Generate a structured case dossier, timeline, and personalized questions to take to a lawyer.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() =>
+                        onPrepareReportFromChat({
+                          title: r.understanding.slice(0, 60),
+                          category: r.category,
+                          facts: [r.understanding],
+                          evidence: r.evidenceToPreserve.documents.map((d, i) => ({
+                            id: `ev-${i}`,
+                            name: d,
+                            type: 'document',
+                            description: 'Document identified during AI analysis',
+                            importance: 'Crucial'
+                          }))
+                        })
+                      }
+                      className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold rounded-lg text-xs hover:brightness-110 flex items-center gap-1.5 shadow-sm transition-all"
+                    >
+                      <span>Generate Case Report</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-xs p-4 shadow-sm flex items-center gap-3">
+              <div className="w-5 h-5 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+              <div className="text-xs text-slate-600">
+                <span className="font-semibold text-slate-800">Retrieving Indian Legal Sources...</span> Cross-referencing current criminal sanhitas, civil procedure, and consumer statutes.
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Suggested Quick Prompts */}
+      <div className="bg-white px-4 py-2 border-t border-slate-200 overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-semibold text-slate-500 whitespace-nowrap text-[11px] uppercase tracking-wide">
+            Common Inquiries:
+          </span>
+          {QUICK_PROMPTS.map((p, idx) => (
+            <button
+              key={idx}
+              onClick={() => handleSend(p)}
+              disabled={isLoading}
+              className="px-2.5 py-1 bg-slate-100 hover:bg-amber-100 hover:text-amber-950 text-slate-700 rounded-full text-xs whitespace-nowrap border border-slate-200/80 transition-colors cursor-pointer"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Input Box and Voice Control */}
+      <div className="bg-white p-3 sm:p-4 border-t border-slate-200">
+        <form
+          onSubmit={e => {
+            e.preventDefault();
+            handleSend();
+          }}
+          className="flex items-center gap-2"
+        >
+          {/* Voice Input Button */}
+          <button
+            type="button"
+            onClick={toggleVoice}
+            className={`p-2.5 rounded-xl border transition-all ${
+              isListening
+                ? 'bg-red-500 text-white border-red-600 animate-pulse'
+                : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+            }`}
+            title={isListening ? 'Listening... click to stop' : 'Speak your legal question'}
+          >
+            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+          </button>
+
+          {/* Text Input */}
+          <input
+            type="text"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder={
+              isListening
+                ? 'Listening... please describe your situation...'
+                : 'Describe your legal problem in plain language (e.g., "My employer has not paid my salary")...'
+            }
+            disabled={isLoading}
+            className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+          />
+
+          {/* Send Button */}
+          <button
+            type="submit"
+            disabled={!input.trim() || isLoading}
+            className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white font-medium rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <span>Ask</span>
+            <Send className="w-3.5 h-3.5" />
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
