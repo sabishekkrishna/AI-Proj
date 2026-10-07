@@ -1,5 +1,6 @@
 import { ai } from './geminiClient.ts';
 import { searchLegalSources, INDIAN_LEGAL_DATABASE, LegalSourceItem } from './legalKnowledgeBase.ts';
+import { ragVectorStore, RagInspectionData } from './ragEngine.ts';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -39,6 +40,7 @@ export interface StructuredChatResponse {
   sources: { title: string; act: string; section?: string; url: string; verifiedDate: string }[];
   emergency: EmergencyInfo;
   simpleLanguageSummary?: string;
+  ragInspection?: RagInspectionData;
 }
 
 export function detectEmergency(text: string): EmergencyInfo {
@@ -104,16 +106,32 @@ export async function generateLegalChatResponse(
   explainLikeNew: boolean = false
 ): Promise<StructuredChatResponse> {
   const emergency = detectEmergency(userQuery);
-  const relevantSources = searchLegalSources(userQuery);
+  // Perform dense + lexical hybrid RAG retrieval
+  const ragInspection = await ragVectorStore.search(userQuery, { topK: 4 });
+  const relevantSources: LegalSourceItem[] = ragInspection.retrievedChunks.map(rc => ({
+    id: rc.chunk.documentId || rc.chunk.id,
+    act: rc.chunk.act,
+    section: rc.chunk.section,
+    chapter: rc.chunk.chapter,
+    title: rc.chunk.title,
+    category: rc.chunk.category,
+    currentStatus: (rc.chunk.currentStatus as any) || 'Current Law',
+    oldEquivalent: rc.chunk.oldEquivalent,
+    summary: rc.chunk.summary,
+    simpleExplanation: rc.chunk.simpleExplanation,
+    fullProvisionsSummary: rc.chunk.text,
+    keyElements: rc.chunk.keyElements || [],
+    remediesOrPenalties: rc.chunk.remediesOrPenalties || '',
+    relevantForums: rc.chunk.relevantForums || ['Jurisdictional Court'],
+    limitationPeriod: rc.chunk.limitationPeriod,
+    sourceUrl: rc.chunk.sourceUrl,
+    officialSourceType: (rc.chunk.officialSourceType as any) || 'Central Act',
+    verifiedDate: rc.chunk.verifiedDate,
+    confidence: rc.chunk.confidence
+  }));
 
-  // RAG Context
-  const ragContext = relevantSources
-    .slice(0, 4)
-    .map(
-      s =>
-        `[ACT]: ${s.act}\n[SECTION]: ${s.section || 'General'}\n[TITLE]: ${s.title}\n[CATEGORY]: ${s.category}\n[STATUS]: ${s.currentStatus} (${s.oldEquivalent || 'No older reference'})\n[EXPLANATION]: ${s.simpleExplanation}\n[FORUMS]: ${s.relevantForums.join(', ')}\n[LIMITATION]: ${s.limitationPeriod || 'Subject to general Limitation Act'}\n[VERIFICATION]: ${s.confidence} (${s.verifiedDate})`
-    )
-    .join('\n---\n');
+  // Grounding Context constructed by RAG Engine
+  const ragContext = ragInspection.contextPromptConstructed;
 
   if (ai) {
     try {
@@ -222,7 +240,8 @@ Format your output as a single valid JSON object with the following fields:
           verifiedDate: s.verifiedDate
         })),
         emergency,
-        simpleLanguageSummary: parsed.simpleLanguageSummary
+        simpleLanguageSummary: parsed.simpleLanguageSummary,
+        ragInspection
       };
     } catch (err) {
       console.warn('Gemini API call failed, falling back to deterministic Indian Legal RAG engine:', err);
@@ -378,7 +397,120 @@ Format your output as a single valid JSON object with the following fields:
       }
     ],
     emergency,
-    simpleLanguageSummary
+    simpleLanguageSummary,
+    ragInspection
+  };
+}
+
+export interface RagAskResponse {
+  answer: string;
+  query: string;
+  retrievedChunks: any[];
+  ragInspection: RagInspectionData;
+  citedProvisions: { act: string; section?: string; title: string; relevance: number }[];
+  keyActions: string[];
+}
+
+export async function askRagQuestion(
+  query: string,
+  options: { topK?: number; category?: string; method?: 'hybrid' | 'vector' | 'lexical'; preferredLanguage?: string } = {}
+): Promise<RagAskResponse> {
+  const topK = options.topK || 4;
+  const method = options.method || 'hybrid';
+  const preferredLanguage = options.preferredLanguage || 'English';
+  const ragInspection = await ragVectorStore.search(query, { topK, category: options.category, method });
+
+  const citedProvisions = ragInspection.retrievedChunks.map(rc => ({
+    act: rc.chunk.act,
+    section: rc.chunk.section,
+    title: rc.chunk.title,
+    relevance: Math.round(rc.score * 100)
+  }));
+
+  if (ai) {
+    try {
+      const systemInstruction = `
+You are NyayaSahayak's Grounded RAG Assistant for Indian Law.
+Your mission is to provide an authoritative, fact-checked response grounded SOLELY in the retrieved legal document chunks provided below.
+
+Rules:
+1. Ground every legal claim in the statutory chunks provided in context.
+2. Explicitly cite the Acts, Sections, and statutory chapters (e.g. "Section 318 of Bharatiya Nyaya Sanhita, 2023").
+3. Distinguish between current Indian legislation (BNS 2023, BNSS 2023, BSA 2023, Consumer Protection Act 2019, IT Act 2000, RERA 2016) and older historical codes where relevant.
+4. Give actionable next steps, jurisdictional forums, and evidence preservation guidelines.
+5. If the user specifies or selects ${preferredLanguage}, formulate your answer in ${preferredLanguage}.
+`;
+
+      const prompt = `
+USER QUERY: "${query}"
+
+RETRIEVED STATUTORY CONTEXT FROM NYAYASAHAYAK VECTOR DATABASE:
+${ragInspection.contextPromptConstructed}
+
+Return a valid JSON object with:
+{
+  "answer": "Clear, grounded legal explanation citing the retrieved acts and sections directly. Structured with paragraphs.",
+  "keyActions": [
+    "Preserve electronic and physical evidence",
+    "Identify competent forum",
+    "Prepare formal demand or legal notice"
+  ]
+}
+`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json'
+        }
+      });
+
+      const parsed = JSON.parse(response.text?.trim() || '{}');
+      return {
+        answer: parsed.answer || 'Information retrieved based on authoritative statutory provisions.',
+        query,
+        retrievedChunks: ragInspection.retrievedChunks,
+        ragInspection,
+        citedProvisions,
+        keyActions: parsed.keyActions || [
+          'Preserve all relevant documentary and digital evidence without alterations.',
+          'Identify the appropriate jurisdictional court or authority before limitation expires.',
+          'Engage a qualified advocate to issue a statutory demand notice.'
+        ]
+      };
+    } catch (err) {
+      console.warn('Gemini RAG answer generation failed, using structured retrieval fallback:', err);
+    }
+  }
+
+  // Structured deterministic RAG synthesis
+  const topChunk = ragInspection.retrievedChunks[0]?.chunk;
+  let answer = '';
+  if (topChunk) {
+    answer = `Based on the retrieved statutory sources in NyayaSahayak's Indian Legal RAG Knowledge Base (Relevance: ${(ragInspection.retrievedChunks[0].score * 100).toFixed(1)}%), this matter is governed by ${topChunk.act}${topChunk.section ? ' (' + topChunk.section + ')' : ''}: "${topChunk.title}".\n\n` +
+      `Summary of Legal Position:\n${topChunk.simpleExplanation}\n\n` +
+      `Statutory Provisions & Scope:\n${topChunk.text.slice(0, 350)}...\n\n` +
+      `Remedies & Penalties:\n${topChunk.remediesOrPenalties}\n\n` +
+      `Competent Forums / Authorities:\n${topChunk.relevantForums.join(', ')}\n\n` +
+      (topChunk.limitationPeriod ? `Limitation Period:\n${topChunk.limitationPeriod}\n\n` : '') +
+      (topChunk.oldEquivalent ? `Historical Law Predecessor:\n${topChunk.oldEquivalent}` : '');
+  } else {
+    answer = `No specific statutory chunk reached the similarity threshold for query "${query}". Please check the general Civil/Criminal provisions.`;
+  }
+
+  return {
+    answer,
+    query,
+    retrievedChunks: ragInspection.retrievedChunks,
+    ragInspection,
+    citedProvisions,
+    keyActions: [
+      'Preserve and catalog all evidence (receipts, notices, chats).',
+      `Approach the competent forum: ${topChunk?.relevantForums?.[0] || 'District Court / Police Station'}.`,
+      'Obtain legal advice from an advocate to verify limitation periods.'
+    ]
   };
 }
 

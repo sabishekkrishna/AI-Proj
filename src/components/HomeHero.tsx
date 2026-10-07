@@ -54,6 +54,14 @@ export default function HomeHero({ onNavigate, onOpenDemoScenarios }: HomeHeroPr
               <Sparkles className="w-4 h-4" />
               <span>10 College Demo Scenarios</span>
             </button>
+
+            <button
+              onClick={() => onNavigate('rag')}
+              className="px-5 py-3 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 font-semibold rounded-xl text-xs sm:text-sm border border-indigo-400/30 transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>Legal RAG Engine</span>
+            </button>
           </div>
         </div>
 

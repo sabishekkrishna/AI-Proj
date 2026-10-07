@@ -13,6 +13,7 @@ export interface LocaleStrings {
   navForums: string;
   navLegalAid: string;
   navDictionary: string;
+  navRag?: string;
   navAdmin: string;
   explainLikeNew: string;
   demoScenarios: string;

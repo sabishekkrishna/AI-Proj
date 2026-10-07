@@ -38,6 +38,7 @@ export default function Header({
 
   const navItems = [
     { id: 'chat', label: t.navAssistant, icon: MessageSquare },
+    { id: 'rag', label: t.navRag || 'RAG Engine', icon: Sparkles },
     { id: 'wizard', label: t.navNewCase, icon: PlusCircle },
     { id: 'dossier', label: t.navDossier, icon: FolderKanban },
     { id: 'analyzer', label: t.navAnalyze, icon: FileText },

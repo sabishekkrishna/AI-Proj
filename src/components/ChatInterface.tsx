@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Mic, MicOff, AlertCircle, FileCheck, ArrowRight, ShieldCheck, Scale, CheckCircle2, HelpCircle, ExternalLink, Sparkles, RefreshCw, BookmarkPlus, Copy, Check } from 'lucide-react';
+import { Send, Mic, MicOff, AlertCircle, FileCheck, ArrowRight, ShieldCheck, Scale, CheckCircle2, HelpCircle, ExternalLink, Sparkles, RefreshCw, BookmarkPlus, Copy, Check, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 import { StructuredChatResponse, ChatMessageItem, CaseRecord } from '../types';
 import { sendChatMessage } from '../services/apiService';
 import { getTranslation } from '../data/translations';
@@ -31,6 +31,7 @@ export default function ChatInterface({
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [expandedRagMsgId, setExpandedRagMsgId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const speechRecognitionRef = useRef<any>(null);
@@ -455,6 +456,78 @@ export default function ChatInterface({
                     <p className="text-slate-700 leading-relaxed">{r.importantWarning}</p>
                   </div>
                 </div>
+
+                {/* RAG Grounding Verification Panel */}
+                {r.ragInspection && (
+                  <div className="bg-slate-900 text-white rounded-xl p-3 border border-slate-800 text-xs">
+                    <div
+                      onClick={() => setExpandedRagMsgId(expandedRagMsgId === msg.id ? null : msg.id)}
+                      className="flex items-center justify-between cursor-pointer select-none"
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        <span className="font-semibold text-white">
+                          RAG Grounding Verified:
+                        </span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-amber-300 border border-slate-700 font-mono">
+                          {r.ragInspection.retrievedChunks.length} Statutory Chunks
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">
+                          ({r.ragInspection.retrievalLatencyMs}ms latency • {r.ragInspection.retrievalMethod})
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-slate-400 hover:text-white text-xs flex items-center gap-1 shrink-0"
+                      >
+                        <span>{expandedRagMsgId === msg.id ? 'Hide RAG Chunks' : 'Inspect RAG'}</span>
+                        {expandedRagMsgId === msg.id ? (
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    {expandedRagMsgId === msg.id && (
+                      <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-400 pb-1">
+                          <span>Classification: <strong className="text-slate-200">{r.ragInspection.classifiedCategory}</strong></span>
+                          <span>• Model: <strong className="text-slate-200">{r.ragInspection.embeddingModel}</strong></span>
+                          <span>• Vector Store: <strong className="text-slate-200">{r.ragInspection.totalIndexedChunks} chunks indexed</strong></span>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {r.ragInspection.retrievedChunks.map((rc, cIdx) => (
+                            <div
+                              key={cIdx}
+                              className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/80 text-[11px]"
+                            >
+                              <div className="flex items-center justify-between font-semibold text-amber-300">
+                                <span>
+                                  #{cIdx + 1} {rc.chunk.act} {rc.chunk.section ? `• ${rc.chunk.section}` : ''} ({rc.chunk.title})
+                                </span>
+                                <span className="bg-amber-500/20 px-1.5 py-0.2 rounded text-amber-300 font-mono text-[10px]">
+                                  {Math.round(rc.score * 100)}% Match
+                                </span>
+                              </div>
+                              <p className="text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                                {rc.chunk.simpleExplanation || rc.chunk.summary}
+                              </p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {rc.matchReasons.map((reason, rIdx) => (
+                                  <span key={rIdx} className="text-[9px] bg-slate-900 px-1.5 py-0.5 rounded text-slate-400">
+                                    {reason}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Sources List */}
                 {r.sources && r.sources.length > 0 && (

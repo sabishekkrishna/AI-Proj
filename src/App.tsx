@@ -13,6 +13,7 @@ import ForumFinder from './components/ForumFinder';
 import LegalAidChecker from './components/LegalAidChecker';
 import LegalDictionaryView from './components/LegalDictionaryView';
 import AdminPanel from './components/AdminPanel';
+import RagHub from './components/RagHub';
 import DemoScenariosModal from './components/DemoScenariosModal';
 import { CaseRecord, CasePreparationReport } from './types';
 
@@ -104,6 +105,15 @@ export default function App() {
           <CaseReportView
             report={activeReport}
             onBack={() => setActiveTab('dossier')}
+          />
+        )}
+
+        {activeTab === 'rag' && (
+          <RagHub
+            preferredLanguage={preferredLanguage}
+            onNavigateToChat={prompt => {
+              setActiveTab('chat');
+            }}
           />
         )}
 

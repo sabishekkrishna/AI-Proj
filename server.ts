@@ -2,8 +2,9 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { generateLegalChatResponse, analyzeLegalDocument, generateCasePreparationReport } from './server/aiService.ts';
+import { generateLegalChatResponse, analyzeLegalDocument, generateCasePreparationReport, askRagQuestion } from './server/aiService.ts';
 import { INDIAN_LEGAL_DATABASE, searchLegalSources, LegalSourceItem } from './server/legalKnowledgeBase.ts';
+import { ragVectorStore } from './server/ragEngine.ts';
 import { apiKey } from './server/geminiClient.ts';
 
 dotenv.config();
@@ -239,15 +240,171 @@ app.post('/api/legal/sources', (req: Request, res: Response) => {
 
 // 6. Admin: System Health Endpoint
 app.get('/api/system/health', (req: Request, res: Response) => {
+  const ragStats = ragVectorStore.getStats();
   res.json({
     status: 'ONLINE',
     hasApiKey: Boolean(apiKey),
     aiEngine: apiKey ? 'Gemini 3.8 Flash (Active)' : 'Deterministic Legal RAG Engine (Active Demo Mode)',
     totalLegalSources: INDIAN_LEGAL_DATABASE.length,
     activeCases: mockCases.length,
+    ragStats,
     auditLogs: auditLogs.slice(0, 20),
     systemTime: new Date().toISOString()
   });
+});
+
+// --- RAG (RETRIEVAL AUGMENTED GENERATION) ENDPOINTS ---
+
+// RAG Search & Inspector Endpoint
+app.post('/api/rag/search', async (req: Request, res: Response) => {
+  try {
+    const { query, topK = 4, category, method = 'hybrid' } = req.body;
+    if (!query || typeof query !== 'string') {
+      res.status(400).json({ error: 'Query is required' });
+      return;
+    }
+
+    const inspection = await ragVectorStore.search(query, {
+      topK: Number(topK),
+      category,
+      method: method as any
+    });
+
+    auditLogs.unshift({
+      id: `log-${Date.now()}`,
+      action: 'RAG_SEARCH',
+      timestamp: new Date().toISOString(),
+      details: `RAG search executed (${method}): "${query.slice(0, 35)}..." -> Retrieved ${inspection.retrievedChunks.length} chunks (${inspection.retrievalLatencyMs}ms)`
+    });
+
+    res.json(inspection);
+  } catch (err: any) {
+    console.error('Error in /api/rag/search:', err);
+    res.status(500).json({ error: 'RAG search failed', details: err.message });
+  }
+});
+
+// RAG Q&A Grounded Response Endpoint
+app.post('/api/rag/ask', async (req: Request, res: Response) => {
+  try {
+    const { query, topK = 4, category, method = 'hybrid', preferredLanguage = 'English' } = req.body;
+    if (!query || typeof query !== 'string') {
+      res.status(400).json({ error: 'Query is required' });
+      return;
+    }
+
+    const ragResponse = await askRagQuestion(query, {
+      topK: Number(topK),
+      category,
+      method: method as any,
+      preferredLanguage
+    });
+
+    auditLogs.unshift({
+      id: `log-${Date.now()}`,
+      action: 'RAG_GROUNDED_QA',
+      timestamp: new Date().toISOString(),
+      details: `RAG grounded answer generated in ${preferredLanguage} for query: "${query.slice(0, 35)}..."`
+    });
+
+    res.json(ragResponse);
+  } catch (err: any) {
+    console.error('Error in /api/rag/ask:', err);
+    res.status(500).json({ error: 'RAG generation failed', details: err.message });
+  }
+});
+
+// RAG Indexed Chunks Viewer
+app.get('/api/rag/chunks', (req: Request, res: Response) => {
+  try {
+    const category = (req.query.category as string) || '';
+    const search = (req.query.search as string || '').toLowerCase().trim();
+    let chunks = ragVectorStore.getAllChunks();
+
+    if (category && category !== 'All') {
+      chunks = chunks.filter(c => c.category.toLowerCase() === category.toLowerCase());
+    }
+
+    if (search) {
+      chunks = chunks.filter(c =>
+        c.title.toLowerCase().includes(search) ||
+        c.act.toLowerCase().includes(search) ||
+        (c.section && c.section.toLowerCase().includes(search)) ||
+        c.text.toLowerCase().includes(search)
+      );
+    }
+
+    res.json({
+      count: chunks.length,
+      stats: ragVectorStore.getStats(),
+      chunks
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to retrieve chunks', details: err.message });
+  }
+});
+
+// RAG Ingestion Pipeline: Ingest Custom Document
+app.post('/api/rag/ingest', async (req: Request, res: Response) => {
+  try {
+    const { title, act, category, section, content, sourceUrl, chunkSize, overlap } = req.body;
+    if (!title || !act || !content) {
+      res.status(400).json({ error: 'Title, Act, and Content are required for RAG ingestion' });
+      return;
+    }
+
+    const result = await ragVectorStore.ingestDocument({
+      title,
+      act,
+      category: category || 'Civil Disputes',
+      section,
+      content,
+      sourceUrl,
+      chunkSize: chunkSize ? Number(chunkSize) : 300,
+      overlap: overlap ? Number(overlap) : 40
+    });
+
+    auditLogs.unshift({
+      id: `log-${Date.now()}`,
+      action: 'RAG_INGESTION',
+      timestamp: new Date().toISOString(),
+      details: `User ingested document: "${title}" -> ${result.ingestedChunks} semantic vector chunks indexed`
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Successfully ingested document and created ${result.ingestedChunks} vector chunks`,
+      ...result
+    });
+  } catch (err: any) {
+    console.error('Error in /api/rag/ingest:', err);
+    res.status(500).json({ error: 'Failed to ingest document into RAG index', details: err.message });
+  }
+});
+
+// Delete Chunk from RAG Index
+app.delete('/api/rag/chunks/:id', (req: Request, res: Response) => {
+  try {
+    const success = ragVectorStore.deleteChunk(req.params.id);
+    if (success) {
+      auditLogs.unshift({
+        id: `log-${Date.now()}`,
+        action: 'RAG_CHUNK_DELETED',
+        timestamp: new Date().toISOString(),
+        details: `Deleted chunk ${req.params.id} from RAG index`
+      });
+      res.json({ success: true, message: 'Chunk deleted from index' });
+    } else {
+      res.status(404).json({ error: 'Chunk not found' });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to delete chunk', details: err.message });
+  }
+});
+
+// RAG Vector Store Stats
+app.get('/api/rag/stats', (req: Request, res: Response) => {
+  res.json(ragVectorStore.getStats());
 });
 
 // 7. Case Management Endpoints

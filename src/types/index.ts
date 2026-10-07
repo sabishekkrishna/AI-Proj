@@ -27,6 +27,51 @@ export interface EmergencyInfo {
   helplines: { name: string; number: string; description: string }[];
 }
 
+export interface LegalChunk {
+  id: string;
+  documentId: string;
+  act: string;
+  section?: string;
+  chapter?: string;
+  title: string;
+  category: string;
+  text: string;
+  summary: string;
+  simpleExplanation: string;
+  keyElements?: string[];
+  remediesOrPenalties?: string;
+  relevantForums: string[];
+  limitationPeriod?: string;
+  sourceUrl: string;
+  officialSourceType: string;
+  verifiedDate: string;
+  confidence: 'Verified' | 'Likely Relevant' | 'Requires Verification';
+  currentStatus?: string;
+  oldEquivalent?: string;
+  tokenCount: number;
+  isCustom?: boolean;
+}
+
+export interface RagSearchResult {
+  chunk: LegalChunk;
+  score: number;
+  vectorScore: number;
+  lexicalScore: number;
+  matchReasons: string[];
+}
+
+export interface RagInspectionData {
+  query: string;
+  classifiedCategory: string;
+  retrievalMethod: string;
+  embeddingModel: string;
+  queryVectorDimensions: number;
+  totalIndexedChunks: number;
+  retrievalLatencyMs: number;
+  retrievedChunks: RagSearchResult[];
+  contextPromptConstructed: string;
+}
+
 export interface StructuredChatResponse {
   understanding: string;
   category: string;
@@ -53,6 +98,7 @@ export interface StructuredChatResponse {
   sources: { title: string; act: string; section?: string; url: string; verifiedDate: string }[];
   emergency: EmergencyInfo;
   simpleLanguageSummary?: string;
+  ragInspection?: RagInspectionData;
 }
 
 export interface ChatMessageItem {
