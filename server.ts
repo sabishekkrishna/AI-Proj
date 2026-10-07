@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { generateLegalChatResponse, analyzeLegalDocument, generateCasePreparationReport, askRagQuestion } from './server/aiService.ts';
-import { INDIAN_LEGAL_DATABASE, searchLegalSources, LegalSourceItem } from './server/legalKnowledgeBase.ts';
+import { INDIAN_LEGAL_DATABASE, searchLegalSources, type LegalSourceItem } from './server/legalKnowledgeBase.ts';
 import { ragVectorStore } from './server/ragEngine.ts';
 import { apiKey } from './server/geminiClient.ts';
 
@@ -244,7 +244,7 @@ app.get('/api/system/health', (req: Request, res: Response) => {
   res.json({
     status: 'ONLINE',
     hasApiKey: Boolean(apiKey),
-    aiEngine: apiKey ? 'Gemini 3.8 Flash (Active)' : 'Deterministic Legal RAG Engine (Active Demo Mode)',
+    aiEngine: apiKey ? 'Gemini AI Engine (Active + RAG Grounding)' : 'Deterministic Legal RAG Engine (Active Demo Mode)',
     totalLegalSources: INDIAN_LEGAL_DATABASE.length,
     activeCases: mockCases.length,
     ragStats,

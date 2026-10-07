@@ -1,5 +1,5 @@
 import { ai } from './geminiClient.ts';
-import { INDIAN_LEGAL_DATABASE, LegalSourceItem } from './legalKnowledgeBase.ts';
+import { INDIAN_LEGAL_DATABASE, type LegalSourceItem } from './legalKnowledgeBase.ts';
 
 export interface LegalChunk {
   id: string;
@@ -110,8 +110,8 @@ class RagVectorStore {
         if (values && values.length > 0) {
           return { vector: values, model: 'gemini-embedding-2-preview' };
         }
-      } catch (err) {
-        console.warn('Gemini embedding API call failed, falling back to local semantic vector index:', err);
+      } catch {
+        // Fall back cleanly to deterministic vector embedding
       }
     }
 

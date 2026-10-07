@@ -9,6 +9,10 @@ export const ai = apiKey
   ? new GoogleGenAI({
       apiKey: apiKey,
       httpOptions: {
+        timeout: 15000,
+        retryOptions: {
+          attempts: 1,
+        },
         headers: {
           'User-Agent': 'aistudio-build',
         },
