@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Mic, MicOff, AlertCircle, FileCheck, ArrowRight, ShieldCheck, Scale, CheckCircle2, HelpCircle, ExternalLink, Sparkles, RefreshCw, BookmarkPlus, Copy, Check, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 import { StructuredChatResponse, ChatMessageItem, CaseRecord } from '../types';
-import { sendChatMessage } from '../services/apiService';
+import { sendChatMessage, fetchSystemHealthApi } from '../services/apiService';
 import { getTranslation } from '../data/translations';
 
 interface ChatInterfaceProps {
@@ -32,9 +32,25 @@ export default function ChatInterface({
   const [isListening, setIsListening] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedRagMsgId, setExpandedRagMsgId] = useState<string | null>(null);
+  const [systemStatus, setSystemStatus] = useState<{ hasApiKey: boolean; aiEngine: string } | null>(null);
+  const [showKeyHint, setShowKeyHint] = useState<boolean>(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const speechRecognitionRef = useRef<any>(null);
+
+  // Fetch engine health on load
+  useEffect(() => {
+    fetchSystemHealthApi()
+      .then(data => {
+        if (data) {
+          setSystemStatus({
+            hasApiKey: Boolean(data.hasApiKey),
+            aiEngine: data.aiEngine || ''
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Update initial welcome message if user changes language before sending messages
   useEffect(() => {
@@ -179,9 +195,22 @@ export default function ChatInterface({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold text-white">NyayaSahayak AI Legal Assistant</h2>
-              <span className="text-[10px] font-medium bg-emerald-950 text-emerald-300 border border-emerald-800/80 px-1.5 py-0.2 rounded-full">
-                Active
-              </span>
+              {systemStatus?.hasApiKey ? (
+                <span className="text-[10px] font-medium bg-emerald-950 text-emerald-300 border border-emerald-800/80 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                  Gemini AI Active
+                </span>
+              ) : (
+                <button
+                  onClick={() => setShowKeyHint(prev => !prev)}
+                  className="text-[10px] font-medium bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-800/80 px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Running without GEMINI_API_KEY. Click for local setup instructions."
+                >
+                  <Cpu className="w-2.5 h-2.5 text-amber-400" />
+                  Local RAG Mode
+                  <ChevronDown className={`w-2.5 h-2.5 transition-transform ${showKeyHint ? 'rotate-180' : ''}`} />
+                </button>
+              )}
             </div>
             <p className="text-[11px] text-slate-400">
               Grounded in Current Indian Laws (BNS, BNSS, BSA, CPA 2019, IT Act)
@@ -213,6 +242,28 @@ export default function ChatInterface({
           </button>
         </div>
       </div>
+
+      {/* Localhost Setup Guide Banner (Shown when running locally without GEMINI_API_KEY) */}
+      {systemStatus && !systemStatus.hasApiKey && (
+        <div className={`bg-amber-950/30 border-b border-amber-900/40 px-5 py-2.5 transition-all text-xs text-amber-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${showKeyHint ? 'block' : 'hidden sm:flex'}`}>
+          <div className="flex items-start sm:items-center gap-2">
+            <Cpu className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+            <span>
+              <strong>Localhost Mode:</strong> Running with built-in Statutory RAG Engine. To enable full dynamic Gemini AI on localhost, set <code className="bg-amber-900/40 px-1.5 py-0.5 rounded font-mono text-amber-300">GEMINI_API_KEY=your_key</code> in your local <code className="bg-amber-900/40 px-1.5 py-0.5 rounded font-mono text-amber-300">.env</code> file.
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText('GEMINI_API_KEY="your_api_key_here"');
+              alert('Copied template: GEMINI_API_KEY="your_api_key_here"\nPaste this into your local .env file.');
+            }}
+            className="self-end sm:self-auto shrink-0 px-2.5 py-1 bg-amber-900/50 hover:bg-amber-800/60 border border-amber-700/60 rounded text-[11px] font-medium text-amber-300 transition-colors flex items-center gap-1 cursor-pointer"
+          >
+            <Copy className="w-3 h-3" />
+            Copy .env line
+          </button>
+        </div>
+      )}
 
       {/* Messages Scroll Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
@@ -283,7 +334,19 @@ export default function ChatInterface({
                     </span>
                     <h3 className="text-base font-semibold text-slate-900">{r.understanding}</h3>
                   </div>
-                  <div className="shrink-0">
+                  <div className="shrink-0 flex items-center gap-1.5">
+                    {r.engineMode === 'deterministic_rag' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-800 border border-amber-300" title="Grounded using local Indian statutory RAG knowledge base">
+                        <Cpu className="w-2.5 h-2.5 text-amber-700" />
+                        Local RAG
+                      </span>
+                    )}
+                    {r.engineMode === 'gemini_ai' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        <Sparkles className="w-2.5 h-2.5 text-emerald-700" />
+                        Gemini AI
+                      </span>
+                    )}
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-900 text-amber-400 border border-slate-800">
                       <Scale className="w-3 h-3" />
                       {r.category}

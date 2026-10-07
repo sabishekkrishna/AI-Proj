@@ -1,6 +1,6 @@
 import { ai } from './geminiClient.ts';
 import { searchLegalSources, INDIAN_LEGAL_DATABASE, type LegalSourceItem } from './legalKnowledgeBase.ts';
-import { ragVectorStore, RagInspectionData } from './ragEngine.ts';
+import { ragVectorStore, type RagInspectionData } from './ragEngine.ts';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -41,6 +41,8 @@ export interface StructuredChatResponse {
   emergency: EmergencyInfo;
   simpleLanguageSummary?: string;
   ragInspection?: RagInspectionData;
+  engineMode?: 'gemini_ai' | 'deterministic_rag';
+  engineNote?: string;
 }
 
 export function detectEmergency(text: string): EmergencyInfo {
@@ -281,7 +283,8 @@ Format your output as a single valid JSON object with the following fields:
           })),
           emergency,
           simpleLanguageSummary: parsed.simpleLanguageSummary,
-          ragInspection
+          ragInspection,
+          engineMode: 'gemini_ai'
         };
       }
     } catch {
@@ -289,106 +292,356 @@ Format your output as a single valid JSON object with the following fields:
     }
   }
 
-  // Deterministic Fallback Engine (Runs whenever GEMINI_API_KEY is not set or network fails)
-  const topSource = relevantSources[0] || INDIAN_LEGAL_DATABASE[0];
+  // --- ENHANCED DYNAMIC FALLBACK RAG ENGINE ---
+  // Runs whenever GEMINI_API_KEY is not set or network fails.
+  // Dynamically matches statutes, generates query-specific questions, evidence, and remedies.
+  return generateDynamicFallbackResponse(
+    userQuery,
+    relevantSources,
+    preferredLanguage,
+    explainLikeNew,
+    emergency,
+    ragInspection
+  );
+}
+
+/**
+ * Builds tailored, statute-grounded responses when running without GEMINI_API_KEY or offline.
+ * Prevents identical/static boilerplate across queries on localhost.
+ */
+function generateDynamicFallbackResponse(
+  userQuery: string,
+  retrievedSources: LegalSourceItem[],
+  preferredLanguage: string,
+  explainLikeNew: boolean,
+  emergency: EmergencyInfo,
+  ragInspection: RagInspectionData
+): StructuredChatResponse {
   const queryLower = userQuery.toLowerCase();
 
-  let determinedCategory = topSource.category;
-  if (queryLower.includes('salary') || queryLower.includes('employer') || queryLower.includes('job') || queryLower.includes('fired')) {
-    determinedCategory = 'Employment/Labour';
-  } else if (queryLower.includes('landlord') || queryLower.includes('deposit') || queryLower.includes('rent') || queryLower.includes('flat')) {
-    determinedCategory = 'Rent/Tenancy';
-  } else if (queryLower.includes('cheated') || queryLower.includes('scam') || queryLower.includes('upi') || queryLower.includes('cyber')) {
-    determinedCategory = 'Cybercrime';
-  } else if (queryLower.includes('product') || queryLower.includes('defective') || queryLower.includes('warranty') || queryLower.includes('flipkart') || queryLower.includes('amazon')) {
-    determinedCategory = 'Consumer Protection';
-  } else if (queryLower.includes('cheque') || queryLower.includes('bounced') || queryLower.includes('loan')) {
-    determinedCategory = 'Banking/Financial Fraud';
-  } else if (queryLower.includes('accident') || queryLower.includes('car') || queryLower.includes('bike') || queryLower.includes('mact')) {
-    determinedCategory = 'Motor Vehicle/Accident';
-  } else if (queryLower.includes('wife') || queryLower.includes('husband') || queryLower.includes('domestic') || queryLower.includes('beating')) {
-    determinedCategory = 'Domestic Violence';
-  } else if (queryLower.includes('land') || queryLower.includes('plot') || queryLower.includes('property') || queryLower.includes('encroach')) {
-    determinedCategory = 'Property Law';
-  } else if (queryLower.includes('police') || queryLower.includes('fir') || queryLower.includes('refuse')) {
-    determinedCategory = 'Criminal Law';
+  // 1. Determine best statutory match from query keywords and RAG results
+  let matchedLaw: LegalSourceItem = retrievedSources[0] || INDIAN_LEGAL_DATABASE[0];
+
+  if (queryLower.includes('salary') || queryLower.includes('employer') || queryLower.includes('wage') || queryLower.includes('unpaid') || queryLower.includes('job') || queryLower.includes('resigned') || queryLower.includes('fired')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'labour-unpaid-salary') || matchedLaw;
+  } else if (queryLower.includes('deposit') || queryLower.includes('landlord') || queryLower.includes('tenant') || queryLower.includes('rent') || queryLower.includes('flat') || queryLower.includes('vacat')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'tenancy-sec-deposit') || matchedLaw;
+  } else if (queryLower.includes('cheque') || queryLower.includes('bounced') || queryLower.includes('bounce') || queryLower.includes('138') || queryLower.includes('dishonour')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'ni-138') || matchedLaw;
+  } else if (queryLower.includes('upi') || queryLower.includes('scam') || queryLower.includes('cyber') || queryLower.includes('otp') || queryLower.includes('phish') || queryLower.includes('hacked') || queryLower.includes('cheated online')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'it-66d') || matchedLaw;
+  } else if (queryLower.includes('product') || queryLower.includes('defective') || queryLower.includes('warranty') || queryLower.includes('refund') || queryLower.includes('flipkart') || queryLower.includes('amazon') || queryLower.includes('consumer')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'cpa-2-35') || matchedLaw;
+  } else if (queryLower.includes('domestic') || queryLower.includes('wife') || queryLower.includes('husband') || queryLower.includes('beating') || queryLower.includes('dowry') || queryLower.includes('abuse') || queryLower.includes('in-laws')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'pwdva-2005') || matchedLaw;
+  } else if (queryLower.includes('accident') || queryLower.includes('car') || queryLower.includes('bike') || queryLower.includes('mact') || queryLower.includes('hit and run') || queryLower.includes('injury')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'mva-166') || matchedLaw;
+  } else if (queryLower.includes('refuse fir') || queryLower.includes('refused fir') || queryLower.includes('police refuse') || queryLower.includes('sp complaint') || queryLower.includes('police not filing')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'bnss-175') || matchedLaw;
+  } else if (queryLower.includes('fir') || queryLower.includes('zero fir') || queryLower.includes('police station')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'bnss-173') || matchedLaw;
+  } else if (queryLower.includes('theft') || queryLower.includes('stolen') || queryLower.includes('stole') || queryLower.includes('thief')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'bns-303') || matchedLaw;
+  } else if (queryLower.includes('threat') || queryLower.includes('threatening') || queryLower.includes('intimidat') || queryLower.includes('harm')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'bns-351') || matchedLaw;
+  } else if (queryLower.includes('defam') || queryLower.includes('reputation') || queryLower.includes('slander') || queryLower.includes('false post')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'bns-356') || matchedLaw;
+  } else if (queryLower.includes('encroach') || queryLower.includes('plot') || queryLower.includes('land') || queryLower.includes('stay order') || queryLower.includes('property') || queryLower.includes('dispossess')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'property-injunction') || matchedLaw;
+  } else if (queryLower.includes('legal aid') || queryLower.includes('free lawyer') || queryLower.includes('cannot afford') || queryLower.includes('poor')) {
+    matchedLaw = INDIAN_LEGAL_DATABASE.find(s => s.id === 'nalsa-12') || matchedLaw;
   }
 
-  const categorySources = INDIAN_LEGAL_DATABASE.filter(s => s.category === determinedCategory);
-  const primaryLaw = categorySources[0] || topSource;
-
+  const determinedCategory = matchedLaw.category;
   const isHindi = preferredLanguage === 'Hindi';
   const isTamil = preferredLanguage === 'Tamil';
   const isTelugu = preferredLanguage === 'Telugu';
 
-  let understanding = `From what you have described, your issue appears to involve ${determinedCategory.toLowerCase()} regarding "${userQuery.slice(0, 90)}...".`;
-  let lawExplanation = primaryLaw.simpleExplanation + ' ' + primaryLaw.fullProvisionsSummary;
-  let followUpQuestions = [
-    'What is the exact date or time frame when this occurred?',
-    'Which Indian State and District did this event take place in?',
-    'Do you have any written agreements, invoices, receipts, or chat logs?',
-    'Have you already issued a written notice, letter, or registered complaint?'
-  ];
-  let possibleNextSteps = [
-    'Preserve and organize all relevant documents and electronic evidence.',
-    'Prepare a clear chronological timeline of events.',
-    'Send a formal written demand or legal notice via registered post / speed post.',
-    `Approach the appropriate forum (${primaryLaw.relevantForums[0] || 'Jurisdictional Court'}).`,
-    'Consult a licensed advocate to formalize your legal petition.'
-  ];
-  let urgencyAndTimeLimits = primaryLaw.limitationPeriod || 'Statutory limitation period applies. Verify the current limitation window under the Limitation Act, 1963 with an advocate.';
-  let importantWarning = 'Important: This is general educational legal guidance. Procedures and state-specific amendments vary. Do not rely solely on automated summaries for court proceedings.';
-  let casePreparationOffer = 'Would you like me to prepare a Case Preparation Report from the details you provided?';
+  // 2. Statute-specific follow-up questions
+  let followUpQuestions: string[] = [];
+  let evidenceToPreserve = {
+    documents: ['Formal agreements, contract letters, receipts, or registered notices'],
+    digital: ['WhatsApp / SMS conversations, emails, and screenshots with timestamps'],
+    financial: ['Bank passbook entries, account statements, and UPI/NEFT transaction IDs'],
+    witnesses: ['Any colleagues, family members, or witnesses present at the scene']
+  };
+  let possibleNextSteps: string[] = [];
+
+  switch (matchedLaw.id) {
+    case 'labour-unpaid-salary':
+      followUpQuestions = [
+        'How many months of salary, incentives, or full & final settlement remain unpaid?',
+        'Do you possess your official appointment letter, employment agreement, and recent salary slips?',
+        'Have you formally resigned with written notice or raised a grievance via your official email?',
+        'What is the registered company name and state where your workplace is situated?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Offer letter, employment contract, and company ID card', 'Salary slips for recent months and Form 16', 'Resignation letter and postal/email acknowledgement'],
+        digital: ['HR email communications admitting delay or discussing wages', 'Biometric/login attendance records and approved timesheets'],
+        financial: ['Bank statement showing past salary credits and subsequent non-payments', 'Full & final settlement calculation sheet or expense claims'],
+        witnesses: ['Colleagues or former employees who faced identical wage withholding']
+      };
+      possibleNextSteps = [
+        'Issue a formal legal demand notice through an advocate giving 15 days to clear pending dues.',
+        'File a statutory claim under Section 15 of Payment of Wages Act / Code on Wages before the Labour Commissioner.',
+        'Initiate conciliation proceedings before the jurisdictional Labour Conciliation Officer.',
+        'For managerial personnel, file a Summary Recovery Suit under Order XXXVII CPC in District Civil Court.'
+      ];
+      break;
+
+    case 'tenancy-sec-deposit':
+      followUpQuestions = [
+        'What is the exact security deposit amount withheld by the landlord?',
+        'Did you serve written notice of vacation adhering to the tenancy agreement terms?',
+        'Has vacant possession and keys been handed over in writing to the landlord?',
+        'Has the landlord claimed specific damages or provided repair contractor invoices?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Signed and dated Rental/Lease Agreement', 'Initial security deposit bank transfer receipt or cheque copy', 'Formal handover note or key return confirmation'],
+        digital: ['WhatsApp and email threads discussing move-out date and deposit refund', 'Video walkthrough and high-resolution photos of the flat taken on handover day'],
+        financial: ['Bank account statement highlighting initial deposit debit', 'All monthly rent transfer receipts and utility bill payment clearances'],
+        witnesses: ['Building security guard, society management member, or broker present at inspection']
+      };
+      possibleNextSteps = [
+        'Send a formal legal demand notice via Speed Post demanding deposit refund with 18% statutory interest.',
+        'File a complaint before the Rent Authority / Rent Tribunal under the State Tenancy Act.',
+        'If tenancy agreement is violated, file a civil recovery suit for money withheld.',
+        'Approach Consumer Disputes Redressal Commission if maintenance or landlord service deficiency is involved.'
+      ];
+      break;
+
+    case 'ni-138':
+      followUpQuestions = [
+        'What is the exact date of the bank return memo stating "Funds Insufficient"?',
+        'Has the mandatory 30-day statutory demand notice been issued via Registered Post AD / Speed Post?',
+        'Was the cheque issued in discharge of an existing debt, invoice, or loan agreement?',
+        'Did the drawer make any payment or reply within 15 days of receiving your legal notice?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Original bounced cheque and original bank return memo / dishonour slip', 'Office copy of statutory demand notice sent through advocate', 'Postal receipt and online tracking report proving delivery to drawer'],
+        digital: ['WhatsApp/email chats acknowledging debt and promising repayment', 'Invoices, purchase orders, or promissory note establishing legal debt'],
+        financial: ['Bank statement showing presentation and dishonour of the cheque', 'Account ledger reflecting loan disbursement or goods delivered'],
+        witnesses: ['Individuals who witnessed the signing/handover of the cheque']
+      };
+      possibleNextSteps = [
+        'Ensure the statutory demand notice is dispatched strictly within 30 days of the bank return memo date.',
+        'Wait mandatory 15 calendar days from the date of delivery of notice for payment.',
+        'File a criminal complaint under Section 138 NI Act before the Judicial Magistrate within 30 days thereafter.',
+        'Pray for 20% interim compensation under Section 143A of the Negotiable Instruments Act.'
+      ];
+      break;
+
+    case 'it-66d':
+      followUpQuestions = [
+        'Did the fraudulent transaction occur within the last 24 hours ("Golden Hour")?',
+        'Did the scammer share a payment link, request OTP, or ask you to install AnyDesk/TeamViewer/APK?',
+        'Have you called the National Cyber Crime Helpline at 1930 to freeze the fraud beneficiary account?',
+        'Which bank, debit/credit card, or UPI app was used for the unauthorized transaction?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Copy of formal complaint filed on cybercrime.gov.in (with Acknowledgement Number)', 'Bank dispute form and chargeback request submission copy'],
+        digital: ['Full mobile screenshots of transaction receipts with visible UTR/UPI reference numbers', 'Phone call recording or call logs showing scammer numbers', 'SMS containing fraud links, OTPs, or debit notifications (do not delete)'],
+        financial: ['Immediate bank statement reflecting unauthorized debit', 'UPI application transaction receipt showing beneficiary VPA/account'],
+        witnesses: ['Bank branch nodal officer or cyber cell investigating officer']
+      };
+      possibleNextSteps = [
+        'Immediately dial 1930 or submit details on cybercrime.gov.in so the Financial Fraud Reporting System can freeze the funds.',
+        'Report to your bank fraud monitoring unit within 3 days for Zero Liability protection under RBI circular.',
+        'Obtain Section 63 BSA certificate for all electronic transaction screenshots.',
+        'Visit your local Cyber Crime Police Station to register an FIR if financial loss is significant.'
+      ];
+      break;
+
+    case 'cpa-2-35':
+      followUpQuestions = [
+        'When did you purchase the item/service, and what is the invoice amount?',
+        'Is the product still covered under manufacturer warranty or return window?',
+        'Did the service center issue a job sheet or repair rejection certificate?',
+        'Have you escalated the grievance to the grievance officer of the company?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Tax invoice / retail bill with GST number and date of purchase', 'Warranty card, terms of service, and user manual', 'Service center job cards, repair refusal slips, or inspection reports'],
+        digital: ['Customer support chat transcripts, ticket numbers, and email threads', 'Photographs and video recordings demonstrating the defect clearly'],
+        financial: ['Credit card / debit card / UPI payment confirmation receipt'],
+        witnesses: ['Independent technician or showroom representative who inspected item']
+      };
+      possibleNextSteps = [
+        'Register a formal consumer grievance on the National Consumer Helpline (NCH - 1915 or consumerhelpline.gov.in).',
+        'Send a formal legal notice to the manufacturer and seller demanding refund or replacement within 15 days.',
+        'File an online consumer complaint via E-Daakhil (edaakhil.nic.in) before District Consumer Commission.',
+        'Claim reimbursement of product cost, compensation for mental agony, and litigation expenses.'
+      ];
+      break;
+
+    case 'pwdva-2005':
+      followUpQuestions = [
+        'Are you and any children currently in immediate physical safety and shelter?',
+        'Do you require an urgent ex-parte Protection Order (restraining violence or communication)?',
+        'Has there been an attempt to unlawfully dispossess or evict you from the shared household?',
+        'Have you contacted the District Protection Officer, local Sakhi Centre, or Women Helpline 181?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Marriage registration certificate, photographs, or family ration card', 'Earlier police complaints or NCR receipts if previously reported'],
+        digital: ['Abusive WhatsApp chats, threatening voice notes, or call logs', 'Photographs and videos documenting physical injuries or damaged belongings'],
+        financial: ['Hospital medico-legal case (MLC) records, doctor prescription slips, and bills', 'Details of shared household rent or stridhan items withheld'],
+        witnesses: ['Neighbors, relatives, doctors, or protection service providers']
+      };
+      possibleNextSteps = [
+        'If in immediate danger, dial 112 (Emergency) or 181 (Women Helpline) for police protection and shelter.',
+        'Approach the District Protection Officer to prepare a Domestic Incident Report (DIR).',
+        'File an application under Section 12 PWDVA before the Judicial Magistrate for Protection and Residence Orders.',
+        'Seek interim maintenance (Sec 20) and compensation (Sec 22) during pendency of proceedings.'
+      ];
+      break;
+
+    case 'bnss-175':
+    case 'bnss-173':
+      followUpQuestions = [
+        'Which police station did you approach, and on what date was the complaint presented?',
+        'Did the Station House Officer (SHO) provide an entry receipt or General Diary (GD) number?',
+        'Is the crime cognizable (e.g. assault, theft, cheating, cyber fraud, molestation)?',
+        'Have you prepared a written copy of the complaint with date and time of refusal?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Copy of signed written complaint submitted to the police station', 'Postal receipt and delivery confirmation of complaint sent to the Superintendent of Police (SP/DCP)'],
+        digital: ['CCTV footage or recordings showing your visit to the police station', 'Text messages, emails, or call logs concerning the incident'],
+        financial: ['Bank or property records related to the underlying crime'],
+        witnesses: ['Individuals who accompanied you to the police station']
+      };
+      possibleNextSteps = [
+        'Send the written complaint by Registered Post to the Superintendent of Police (SP/DCP) under Section 175(3) BNSS.',
+        'If unresolved after reasonable time, file an application under Section 175(4) BNSS before the Judicial Magistrate.',
+        'Attach an affidavit confirming submission to SHO and SP.',
+        'Magistrate can order registration of FIR and monitor police investigation report.'
+      ];
+      break;
+
+    case 'bns-303':
+      followUpQuestions = [
+        'Where and when was your property removed from your possession?',
+        'Do you have purchase bills, IMEI numbers (for electronics), or RC book (for vehicles)?',
+        'Have you reported the incident to the police station having territorial jurisdiction?',
+        'Are there public or private CCTV cameras located around the scene of theft?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Purchase invoices, registration certificates (RC), or IMEI bar codes', 'Copy of FIR registered under Section 303 BNS'],
+        digital: ['CCTV camera footage showing movement or suspicious persons', 'Location history / find-my-device tracking logs'],
+        financial: ['Insurance policy document to claim theft compensation'],
+        witnesses: ['Eyewitnesses, building security guards, or shopkeepers nearby']
+      };
+      possibleNextSteps = [
+        'Report to the nearest police station immediately to register an FIR under Section 303 BNS (Zero FIR if elsewhere).',
+        'For stolen mobiles, block the IMEI number on the CEIR portal (ceir.gov.in).',
+        'Notify your insurance provider within statutory policy window with FIR copy.',
+        'Preserve CCTV footage before the recording buffer overwrites.'
+      ];
+      break;
+
+    case 'bns-351':
+      followUpQuestions = [
+        'What was the exact wording or nature of the threat (death, bodily injury, property damage)?',
+        'Was the threat issued in person, over a phone call, or via digital messaging?',
+        'Is there immediate danger to your physical safety or family members?',
+        'Have you previously had any disputes or litigation with the accused person?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Written record of date, time, and exact statements made during threats', 'Written complaint submitted to police requesting protection'],
+        digital: ['Call recordings, voicemail, SMS, or WhatsApp audio clips containing the threats', 'Call history and caller ID screenshots'],
+        financial: ['Any extortion or money demands mentioned in the threat'],
+        witnesses: ['Persons who heard the call on speaker or witnessed the verbal confrontation']
+      };
+      possibleNextSteps = [
+        'If facing immediate threat to life, call 112 immediately.',
+        'Lodge a formal complaint at the local police station under Section 351 BNS.',
+        'If threat involves death or grievous hurt (Sec 351(2) BNS, up to 7 years), demand FIR registration.',
+        'Seek protective injunction from civil court if threats relate to property or eviction.'
+      ];
+      break;
+
+    case 'property-injunction':
+      followUpQuestions = [
+        'Do you hold registered title deeds, sale deeds, and updated mutation/khata records?',
+        'When did the opposing party first attempt to encroach or disturb peaceful possession?',
+        'Have you had a formal survey conducted by government taluk/revenue surveyors?',
+        'Has any criminal trespass complaint (Section 329 BNS) been lodged with local police?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Registered Sale Deed / Gift Deed and chain parent documents', 'Updated Patta, Khata certificate, and latest property tax receipts', 'Government survey sketch, demarcation report, and building sanction plan'],
+        digital: ['Date-stamped photographs and videos of the encroachment and boundary markers', 'Drone or CCTV footage of illegal construction work'],
+        financial: ['Receipts of tax payments and utility connections in your name'],
+        witnesses: ['Adjacent land owners, village administrative officer (VAO), or revenue patwari']
+      };
+      possibleNextSteps = [
+        'File an urgent Suit for Permanent Injunction and Possession in the jurisdictional Civil Court.',
+        'File an Interim Application under Order XXXIX Rules 1 & 2 CPC for an immediate ex-parte temporary injunction ("Stay Order").',
+        'Lodge a written complaint with the local police station for Criminal Trespass under Section 329 BNS.',
+        'Submit an urgent representation to the local municipal or revenue authority to halt unapproved construction.'
+      ];
+      break;
+
+    case 'mva-166':
+      followUpQuestions = [
+        'When and where did the accident take place, and which vehicles were involved?',
+        'Has the jurisdictional police station registered an FIR and filed the Detailed Accident Report (DAR)?',
+        'Did the accident occur within the last 6 months (strict limitation under Section 166(3) MVA)?',
+        'Do you have the offending vehicle registration number and third-party insurance policy details?'
+      ];
+      evidenceToPreserve = {
+        documents: ['Copy of FIR, Charge Sheet, and Site Map (Site Panchnama)', 'Detailed Accident Report (DAR) filed by police in MACT', 'Post-mortem report / Medico-legal Case (MLC) certificate'],
+        digital: ['Photographs of vehicular damage, skid marks, and accident spot', 'Dashcam or street CCTV video footage'],
+        financial: ['All hospital treatment bills, pharmacy receipts, and disability assessment certificates', 'Proof of income (salary slips, ITR) to compute compensation multiplier'],
+        witnesses: ['Eye witnesses named in the police panchnama']
+      };
+      possibleNextSteps = [
+        'Ensure the claim petition is filed before MACT strictly within 6 months of accident date.',
+        'Obtain the certified copy of DAR from the investigating police officer.',
+        'File MACT Claim Petition under Section 166 of Motor Vehicles Act at the District Claims Tribunal.',
+        'Claim interim compensation under Section 164 (No Fault Liability) if applicable.'
+      ];
+      break;
+
+    default:
+      followUpQuestions = [
+        `What is the exact date or time frame when this ${determinedCategory.toLowerCase()} incident occurred?`,
+        'Which Indian State and District did this event take place in?',
+        'Do you have any written agreements, invoices, receipts, or chat logs relating to the dispute?',
+        'Have you already issued a written notice, letter, or registered complaint to the opposing party?'
+      ];
+      possibleNextSteps = [
+        'Preserve and organize all relevant documents and electronic evidence without altering timestamps.',
+        'Prepare a clear chronological timeline of events and communications.',
+        'Send a formal written demand or legal notice via registered post / speed post through an advocate.',
+        `Approach the appropriate forum (${matchedLaw.relevantForums[0] || 'Jurisdictional Court'}).`,
+        'Consult a licensed advocate to formalize your legal petition.'
+      ];
+      break;
+  }
+
+  // 3. Multilingual synthesis
+  const snippet = userQuery.trim().slice(0, 80);
+  let understanding = `From what you have described regarding "${snippet}...", your issue relates to ${determinedCategory} under Indian law, specifically governed by ${matchedLaw.act}${matchedLaw.section ? ` (${matchedLaw.section})` : ''}.`;
+  let lawExplanation = `${matchedLaw.simpleExplanation} ${matchedLaw.fullProvisionsSummary}`;
+  let urgencyAndTimeLimits = matchedLaw.limitationPeriod || 'Statutory limitation period applies. Verify the current limitation window under the Limitation Act, 1963 with an advocate.';
+  let importantWarning = 'Important: This is structured legal information generated by the Indian Legal RAG knowledge base. Consult a licensed advocate before initiating judicial proceedings.';
+  let casePreparationOffer = 'Would you like me to prepare a structured Case Preparation Report from the details you have provided?';
   let simpleLanguageSummary = explainLikeNew
-    ? `In plain words: You may have a legitimate legal right to seek a remedy under ${primaryLaw.act}. Make sure you keep your documents safe and don't delay reaching out to the right authority.`
+    ? `In plain words: You may have a legitimate legal right to seek a remedy under ${matchedLaw.act}. Make sure you keep your documents safe and don't delay reaching out to the right authority.`
     : undefined;
 
   if (isHindi) {
-    understanding = `आपके विवरण के अनुसार, आपका मामला "${userQuery.slice(0, 70)}..." से संबंधित ${determinedCategory} (भारतीय कानून) के अंतर्गत आता है।`;
-    lawExplanation = `${primaryLaw.simpleExplanation}। कानून के अनुसार पीड़ित पक्ष को सक्षम न्यायालय अथवा प्राधिकारी के समक्ष विधिक उपचार मांगने का अधिकार है।`;
-    followUpQuestions = [
-      'यह घटना अथवा विवाद किस निश्चित तिथि को प्रारंभ हुआ?',
-      'यह मामला किस राज्य और जिले का है?',
-      'क्या आपके पास लिखित अनुबंध, बैंक रसीद, व्हाट्सएप चैट अथवा ईमेल उपलब्ध हैं?',
-      'क्या आपने दूसरी पार्टी को पहले कोई लिखित शिकायत अथवा कानूनी नोटिस भेजा है?'
-    ];
-    possibleNextSteps = [
-      'सभी दस्तावेजी व डिजिटल साक्ष्य (व्हाट्सएप चैट, बैंक स्टेटमेंट) सुरक्षित करें।',
-      'घटनाक्रम की एक स्पष्ट समय-सारिणी (Timeline) तैयार करें।',
-      'वकील के माध्यम से एक औपचारिक कानूनी नोटिस (Legal Notice) भेजें।',
-      `उचित कानूनी मंच (${primaryLaw.relevantForums[0] || 'संबंधित न्यायालय'}) में संपर्क करें।`,
-      'योग्य अधिवक्ता से परामर्श लेकर औपचारिक याचिका प्रस्तुत करें।'
-    ];
-    urgencyAndTimeLimits = primaryLaw.limitationPeriod ? `समय सीमा (Limitation): ${primaryLaw.limitationPeriod}` : 'कानूनी मामलों में निश्चित समय-सीमा (Limitation Period) लागू होती है। समय बीतने से पूर्व वकील से परामर्श लें।';
+    understanding = `आपके विवरण के अनुसार ("${snippet}..."), आपका मामला भारतीय कानून के तहत ${determinedCategory} से संबंधित है, जो मुख्य रूप से ${matchedLaw.act}${matchedLaw.section ? ` (${matchedLaw.section})` : ''} के अंतर्गत आता है।`;
+    lawExplanation = `${matchedLaw.simpleExplanation}। कानून के अनुसार पीड़ित पक्ष को सक्षम न्यायालय अथवा प्राधिकारी के समक्ष विधिक उपचार मांगने का अधिकार है।`;
+    urgencyAndTimeLimits = matchedLaw.limitationPeriod ? `समय सीमा (Limitation): ${matchedLaw.limitationPeriod}` : 'कानूनी मामलों में निश्चित समय-सीमा (Limitation Period) लागू होती है। समय बीतने से पूर्व वकील से परामर्श लें।';
     importantWarning = 'महत्वपूर्ण चेतावनी: यह केवल सामान्य कानूनी जागरूकता है। विभिन्न राज्यों में प्रक्रियाएं भिन्न हो सकती हैं। न्यायालय में जाने से पूर्व किसी योग्य अधिवक्ता से परामर्श अवश्य लें।';
     casePreparationOffer = 'क्या आप चाहेंगे कि मैं आपके द्वारा दी गई जानकारी से एक औपचारिक केस तैयारी रिपोर्ट (Case Preparation Report) तैयार करूँ?';
     simpleLanguageSummary = explainLikeNew
-      ? `सरल शब्दों में: ${primaryLaw.act} के तहत आपको कानूनी अधिकार प्राप्त हो सकता है। अपने सभी सबूतों को संभाल कर रखें और देरी न करें।`
+      ? `सरल शब्दों में: ${matchedLaw.act} के तहत आपको कानूनी अधिकार प्राप्त हो सकता है। अपने सभी सबूतों को संभाल कर रखें और देरी न करें।`
       : undefined;
   } else if (isTamil) {
-    understanding = `நீங்கள் விவரித்த தகவலின்படி, உங்கள் பிரச்சனை "${userQuery.slice(0, 70)}..." தொடர்பான ${determinedCategory} சட்டப் பிரிவின் கீழ் வருகிறது.`;
-    followUpQuestions = [
-      'இந்த பிரச்சனை எந்த தேதியில் தொடங்கியது?',
-      'எந்த மாநிலம் மற்றும் மாவட்டத்தில் இது நிகழ்ந்தது?',
-      'உங்களிடம் ஒப்பந்தம், வங்கி ரசீது அல்லது வாட்ஸ்அப் உரையாடல் உள்ளதா?',
-      'எதிர் தரப்பினருக்கு ஏற்கனவே எழுத்துப்பூர்வ கடிதம் அல்லது வக்கீல் நோட்டீஸ் அனுப்பியுள்ளீர்களா?'
-    ];
-    possibleNextSteps = [
-      'அனைத்து ஆவணங்களையும் டிஜிட்டல் சான்றுகளையும் பாதுகாக்கவும்.',
-      'சம்பவங்களின் காலவரிசையை (Timeline) தயார் செய்யவும்.',
-      'வழக்கறிஞர் மூலம் அதிகாரப்பூர்வ சட்ட அறிவிப்பை (Legal Notice) அனுப்பவும்.',
-      'தகுந்த நீதிமன்றம் அல்லது அதிகாரியை அணுகவும்.'
-    ];
-    importantWarning = 'முக்கிய எச்சரிக்கை: இது பொதுவான சட்ட வழிகாட்டல் மட்டுமே. நீதிமன்ற நடவடிக்கைகளுக்கு தகுதியான வழக்கறிஞரை அணுகவும்.';
+    understanding = `நீங்கள் விவரித்த தகவலின்படி ("${snippet}..."), உங்கள் பிரச்சனை ${determinedCategory} சட்டப் பிரிவின் கீழ் வருகிறது (${matchedLaw.act}).`;
     casePreparationOffer = 'நீங்கள் வழங்கிய தகவல்களைக் கொண்டு வழக்கு தயாரிப்பு அறிக்கையை உருவாக்க விரும்புகிறீர்களா?';
   } else if (isTelugu) {
-    understanding = `మీరు వివరించిన వివరాల ప్రకారం, మీ సమస్య ${determinedCategory} పరిధిలోకి వస్తుంది.`;
-    followUpQuestions = [
-      'ఈ సమస్య ఏ తేదీన ప్రారంభమైంది?',
-      'ఏ రాష్ట్రం మరియు జిల్లాలో జరిగింది?',
-      'మీ వద్ద ఒప్పంద పత్రాలు, బ్యాంక్ రశీదులు లేదా చాట్ వివరాలు ఉన్నాయా?',
-      'ఇంతకుముందు లీగల్ నోటీసు పంపించారా?'
-    ];
+    understanding = `మీరు అందించిన వివరాల ప్రకారం ("${snippet}..."), మీ సమస్య ${determinedCategory} పరిధిలోకి వస్తుంది (${matchedLaw.act}).`;
     casePreparationOffer = 'మీరు అందించిన సమాచారంతో పూర్తి కేస్ ప్రిపరేషన్ రిపోర్ట్‌ను సిద్ధం చేయమంటారా?';
   }
 
@@ -397,19 +650,19 @@ Format your output as a single valid JSON object with the following fields:
     category: determinedCategory,
     relevantLaws: [
       {
-        act: primaryLaw.act,
-        section: primaryLaw.section,
-        status: primaryLaw.currentStatus,
-        explanation: isHindi ? primaryLaw.simpleExplanation : primaryLaw.simpleExplanation,
-        verificationStatus: primaryLaw.confidence
+        act: matchedLaw.act,
+        section: matchedLaw.section,
+        status: matchedLaw.currentStatus,
+        explanation: matchedLaw.simpleExplanation,
+        verificationStatus: matchedLaw.confidence
       },
-      ...(primaryLaw.oldEquivalent
+      ...(matchedLaw.oldEquivalent
         ? [
             {
-              act: primaryLaw.oldEquivalent,
+              act: matchedLaw.oldEquivalent,
               section: undefined,
               status: 'Historical Reference' as const,
-              explanation: isHindi ? 'पूर्ववर्ती कानूनी प्रावधान जो नए कानून से पूर्व लागू था।' : 'Former statutory provision applicable before recent reforms.',
+              explanation: isHindi ? 'पूर्ववर्ती कानूनी प्रावधान जो नए कानून से पूर्व लागू था।' : 'Former statutory provision applicable before recent legal reforms.',
               verificationStatus: 'Verified' as const
             }
           ]
@@ -417,29 +670,26 @@ Format your output as a single valid JSON object with the following fields:
     ],
     lawExplanation,
     followUpQuestions,
-    evidenceToPreserve: {
-      documents: isHindi ? ['अनुबंध पत्र, रसीदें, बिल, या रजिस्टर्ड नोटिस'] : ['Formal agreements, contract letters, receipts, or registered notices'],
-      digital: isHindi ? ['व्हाट्सएप व एसएमएस संदेश, ईमेल, और स्क्रीनशॉट'] : ['WhatsApp / SMS conversations, emails, and screenshots with timestamps'],
-      financial: isHindi ? ['बैंक पासबुक प्रविष्टियां, खाता विवरण, व यूपीआई यूटीआर संख्याएं'] : ['Bank passbook entries, account statements, and UPI/NEFT transaction IDs'],
-      witnesses: isHindi ? ['घटनास्थल अथवा लेन-देन के समय उपस्थित कोई भी सहकर्मी या गवाह'] : ['Any colleagues, family members, or witnesses present at the scene']
-    },
+    evidenceToPreserve,
     possibleNextSteps,
-    possibleForum: primaryLaw.relevantForums,
+    possibleForum: matchedLaw.relevantForums,
     urgencyAndTimeLimits,
     importantWarning,
     casePreparationOffer,
     sources: [
       {
-        title: primaryLaw.title,
-        act: primaryLaw.act,
-        section: primaryLaw.section,
-        url: primaryLaw.sourceUrl,
-        verifiedDate: primaryLaw.verifiedDate
+        title: matchedLaw.title,
+        act: matchedLaw.act,
+        section: matchedLaw.section,
+        url: matchedLaw.sourceUrl,
+        verifiedDate: matchedLaw.verifiedDate
       }
     ],
     emergency,
     simpleLanguageSummary,
-    ragInspection
+    ragInspection,
+    engineMode: 'deterministic_rag',
+    engineNote: 'Running via Local Indian Legal RAG Engine. Set GEMINI_API_KEY in your local .env to enable full Gemini AI generation.'
   };
 }
 

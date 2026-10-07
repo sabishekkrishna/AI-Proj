@@ -99,6 +99,8 @@ export interface StructuredChatResponse {
   emergency: EmergencyInfo;
   simpleLanguageSummary?: string;
   ragInspection?: RagInspectionData;
+  engineMode?: 'gemini_ai' | 'deterministic_rag';
+  engineNote?: string;
 }
 
 export interface ChatMessageItem {
